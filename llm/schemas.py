@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Annotated, Optional
+from typing import List, Literal,Annotated, Optional
 
 class Section(BaseModel):
     start_line: int = Field(description="Line number where this topic starts")

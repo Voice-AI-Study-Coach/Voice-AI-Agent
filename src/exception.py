@@ -16,3 +16,9 @@ class CustomException(Exception):
         self.error = error_message_detail(error, error_detail)
     def __str__(self):
         return self.error
+
+
+class GradingException(CustomException):
+    """Exception type for grading-related failures."""
+    def __init__(self, error, error_detail: ModuleType = sys):
+        super().__init__(error, error_detail)

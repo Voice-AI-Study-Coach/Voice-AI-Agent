@@ -9,4 +9,5 @@ langchain-groq
 pymupdf
 pydantic
 dotenv
+openai
 -e .

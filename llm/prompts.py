@@ -3,7 +3,8 @@ import sys
 from src.exception import CustomException
 from src.logger import logging
 from typing import List
-def chunking_prompt(hints, numbered_w):
+
+def chunking_prompt(hints, numbered_w, format_instructions):
     try:
         return f"""Below is part of a study document with numbered lines.
         Divide it into study sections by topic.
@@ -22,9 +23,38 @@ def chunking_prompt(hints, numbered_w):
 
         DOCUMENT:
         {numbered_w}
+
+        {format_instructions}
         """
     except Exception as e:
         raise CustomException(e, sys)
+
+DIFFICULTY = """1 = Recall a single fact stated in the text
+2 = State a definition or list the parts of something
+3 = Explain how or why something works
+4 = Apply the concept to a specific case or example
+5 = Compare two things, or reason about an edge case"""
+
+def build_q_prompt(topic, content, n, format_instructions):
+    return f"""Generate exactly {n} quiz questions from this study material.
+
+Topic: {topic}
+
+Difficulty scale:
+{DIFFICULTY}
+
+Rules:
+- Every question must be answerable from the material below alone
+- Questions are answered ALOUD — no multiple choice, no fill-in-the-blank
+- key_points are the distinct ideas a correct answer must contain, as concepts not exact wording
+- Spread questions across difficulty levels
+- Do not ask about figure labels or diagram text
+
+MATERIAL:
+{content}
+
+{format_instructions}
+"""
 
 
 def grading_system_prompt(format_instructions: str) -> str:
@@ -98,3 +128,6 @@ def coaching_human_prompt(
         )
     except Exception as e:
         raise CustomException(e, sys)
+>>>>>>> d438e8cc04c2adaf40be9d9208fa25594607b645
+=======
+>>>>>>> 17be73a8d02110e4ba62f24752ad30224dbadb3a

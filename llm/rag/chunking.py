@@ -10,6 +10,7 @@ from src.logger import logging
 from llm.schemas import Sections
 from llm.prompts import chunking_prompt
 from dotenv import load_dotenv
+from langchain_classic.output_parsers import PydanticOutputParser
 
 load_dotenv()
 
@@ -31,8 +32,8 @@ class Chunking:
                     hints.append(clean)
             lines = full.split("\n")
             numbered = "\n".join(f"{i}: {l}" for i, l in enumerate(lines))
-            llm = ChatGroq(model='llama-3.3-70b-versatile', temperature=0)
-            structured = llm.with_structured_output(schema=Sections)
+            llm = ChatOllama(model='llama3.2:3b', temperature=0)
+            parser = PydanticOutputParser(pydantic_object=Sections)
 
             WINDOW = 150
             raw_secs = []
@@ -40,14 +41,25 @@ class Chunking:
             for start in range(0, len(lines), WINDOW):
                 window = lines[start:start + WINDOW]
                 numbered_w = "\n".join(f"{start+i}: {l}" for i, l in enumerate(window))
-                prompt = chunking_prompt(hints=hints, numbered_w=numbered_w)
-                raw_secs.extend(structured.invoke(prompt).sections)
-                
+                prompt = chunking_prompt(hints=hints, numbered_w=numbered_w, format_instructions=parser.get_format_instructions())
+                response = llm.invoke(prompt)
+                parsed = parser.parse(response.content)   # this is a Sections object
+                raw_secs.extend(parsed.sections)   
+                            
             raw_secs.sort(key=lambda s: s.start_line)
             secs = []
             for s in raw_secs:
                 if not secs or s.start_line > secs[-1].start_line:
                     secs.append(s)
-            return secs
+            assert len(secs) >= 2
+            assert all(0 <= s.start_line < len(lines) for s in secs)
+            assert all(secs[i].start_line < secs[i+1].start_line for i in range(len(secs)-1))
+            llm_chunks = []
+            for i, s in enumerate(secs):
+                end = secs[i+1].start_line if i+1 < len(secs) else len(lines)
+                content = "\n".join(lines[s.start_line:end]).strip()    
+                if content:
+                    llm_chunks.append({"topic": s.topic, "parent": s.parent, "content": content})
+            return llm_chunks
         except Exception as e:
             raise CustomException(e, sys)

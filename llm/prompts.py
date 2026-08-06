@@ -2,13 +2,9 @@ import sys
 
 from src.exception import CustomException
 from src.logger import logging
-<<<<<<< HEAD
+from typing import List
 
 def chunking_prompt(hints, numbered_w, format_instructions):
-=======
-from typing import List
-def chunking_prompt(hints, numbered_w):
->>>>>>> d438e8cc04c2adaf40be9d9208fa25594607b645
     try:
         return f"""Below is part of a study document with numbered lines.
         Divide it into study sections by topic.
@@ -33,7 +29,6 @@ def chunking_prompt(hints, numbered_w):
     except Exception as e:
         raise CustomException(e, sys)
 
-<<<<<<< HEAD
 DIFFICULTY = """1 = Recall a single fact stated in the text
 2 = State a definition or list the parts of something
 3 = Explain how or why something works
@@ -60,7 +55,7 @@ MATERIAL:
 
 {format_instructions}
 """
-=======
+
 
 def grading_system_prompt(format_instructions: str) -> str:
     try:
@@ -134,3 +129,5 @@ def coaching_human_prompt(
     except Exception as e:
         raise CustomException(e, sys)
 >>>>>>> d438e8cc04c2adaf40be9d9208fa25594607b645
+=======
+>>>>>>> 17be73a8d02110e4ba62f24752ad30224dbadb3a

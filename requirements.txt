@@ -3,4 +3,10 @@ langchain-community
 langchain-classic
 fastapi
 uvicorn
-# -e .
+langchain-ollama
+langchain-google-genai
+langchain-groq
+pymupdf
+pydantic
+dotenv
+-e .

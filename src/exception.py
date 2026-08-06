@@ -1,7 +1,8 @@
 import sys
+from types import ModuleType
 from src.logger import logging
 
-def error_message_detail(error, error_detail: sys):
+def error_message_detail(error, error_detail: ModuleType):
     _, _, exc_tb = error_detail.exc_info()
     file_name = exc_tb.tb_frame.f_code.co_filename
     error_message = "Error occured in filename [{0}] line number [{1}] and error is [{2}]".format(
@@ -10,7 +11,7 @@ def error_message_detail(error, error_detail: sys):
     return error_message
 
 class CustomException(Exception):
-    def __init__(self, error, error_detail: sys):
+    def __init__(self, error, error_detail: ModuleType):
         super().__init__(error)
         self.error = error_message_detail(error, error_detail)
     def __str__(self):

@@ -10,6 +10,8 @@ __pycache__/
 .Python
 build/
 develop-eggs/
+ocr-testing/opencv_results/
+ocr-testing/ocr_results/
 dist/
 downloads/
 eggs/

@@ -3,6 +3,12 @@ import pymupdf as fitz
 import sys
 import asyncio
 
+# Windows terminals default to cp1252, which can't encode characters like
+# Greek letters (e.g. δ) that show up in generated question text. Force
+# stdout/stderr to UTF-8 so printing never crashes the pipeline.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 from src.logger import logging
 from src.exception import CustomException
 from llm.rag.chunking import Chunking
@@ -23,11 +29,15 @@ class DocumentIngestion:
 async def main():
     ingestion = DocumentIngestion(path=r'C:\Voice Agent\testing\docs\Unit-1.pdf')
     documents = ingestion.loadDocument()
+    print("Ingestion completed")
     chunking = Chunking(doc=documents[0], toc=documents[1])
     chunks = chunking.documentChunking()
+    print("Chunking completed")
     embedding = QuestionGenerator(chunks=chunks)
     questions = await embedding.generateQuestions()
-    print(questions)
+    for question in questions:
+        print("\n",question)
+        print("\n")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -10,4 +10,5 @@ pymupdf
 pydantic
 dotenv
 openai
+langchain-cerebras
 -e .

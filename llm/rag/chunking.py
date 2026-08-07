@@ -9,6 +9,7 @@ from src.exception import CustomException
 from src.logger import logging
 from llm.schemas import Sections
 from llm.prompts import chunking_prompt
+from llm.rotation_shifting import groq_pool, is_rate_limit_error
 from dotenv import load_dotenv
 from langchain_classic.output_parsers import PydanticOutputParser
 
@@ -18,6 +19,30 @@ class Chunking:
     def __init__(self, doc, toc):
         self.doc = doc
         self.toc = toc
+
+    def _structured_groq(self):
+        """Build a ChatGroq structured-output client using a key that isn't rate-limited."""
+        key = groq_pool.get_key()
+        llm = ChatGroq(model='llama-3.3-70b-versatile', temperature=0, api_key=key)
+        return key, llm.with_structured_output(schema=Sections)
+
+    def _invoke_with_rotation(self, prompt):
+        """Invoke Groq, rotating to the next available key on rate-limit errors."""
+        last_exc = None
+        for _ in range(len(groq_pool._keys)):
+            key, structured = self._structured_groq()
+            try:
+                result = structured.invoke(prompt)
+                groq_pool.mark_success(key)
+                return result
+            except Exception as e:
+                if is_rate_limit_error(e):
+                    groq_pool.mark_rate_limited(key)
+                    last_exc = e
+                    continue
+                raise
+        raise CustomException(last_exc or "All Groq keys are rate-limited", sys)
+
     def documentChunking(self):
         try:
             full, page_starts = "", []
@@ -32,19 +57,17 @@ class Chunking:
                     hints.append(clean)
             lines = full.split("\n")
             numbered = "\n".join(f"{i}: {l}" for i, l in enumerate(lines))
-            llm = ChatOllama(model='llama3.2:3b', temperature=0)
-            parser = PydanticOutputParser(pydantic_object=Sections)
-
             WINDOW = 150
             raw_secs = []
 
             for start in range(0, len(lines), WINDOW):
                 window = lines[start:start + WINDOW]
                 numbered_w = "\n".join(f"{start+i}: {l}" for i, l in enumerate(window))
-                prompt = chunking_prompt(hints=hints, numbered_w=numbered_w, format_instructions=parser.get_format_instructions())
-                response = llm.invoke(prompt)
-                parsed = parser.parse(response.content)   # this is a Sections object
-                raw_secs.extend(parsed.sections)   
+                prompt = chunking_prompt(
+                    hints=hints,
+                    numbered_w=numbered_w
+                )
+                raw_secs.extend(self._invoke_with_rotation(prompt).sections)
                             
             raw_secs.sort(key=lambda s: s.start_line)
             secs = []

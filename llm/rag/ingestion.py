@@ -13,6 +13,7 @@ from src.logger import logging
 from src.exception import CustomException
 from llm.rag.chunking import Chunking
 from llm.rag.generation import QuestionGenerator    
+from llm.rag.embedding import Embedding
 
 class DocumentIngestion:
     def __init__(self, path):
@@ -33,11 +34,13 @@ async def main():
     chunking = Chunking(doc=documents[0], toc=documents[1])
     chunks = chunking.documentChunking()
     print("Chunking completed")
-    embedding = QuestionGenerator(chunks=chunks)
-    questions = await embedding.generateQuestions()
-    for question in questions:
-        print("\n",question)
-        print("\n")
+    embedding = Embedding(chunks=chunks)
+    print(embedding.generateEmbedding())
+    # embedding = QuestionGenerator(chunks=chunks)
+    # questions = await embedding.generateQuestions()
+    # for question in questions:
+    #     print("\n",question)
+    #     print("\n")
 
 if __name__ == "__main__":
     asyncio.run(main())

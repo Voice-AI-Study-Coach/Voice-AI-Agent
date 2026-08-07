@@ -11,4 +11,5 @@ pydantic
 dotenv
 openai
 langchain-cerebras
+supabase
 -e .

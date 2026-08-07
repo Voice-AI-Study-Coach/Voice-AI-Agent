@@ -16,7 +16,7 @@ class GeneratedQuestion(BaseModel):
     difficulty: int = Field(ge=1, le=5)
 
 class GeneratedQuestions(BaseModel):
-    questions: List[GeneratedQuestion]
+    questions: List[GeneratedQuestion] = Field(description="10 to 15 questions spread across difficulty levels 1-5")
 
 class GradeVerdict(BaseModel):
     verdict: Literal['correct', 'partial', 'wrong', 'dont_know', 'unclear']

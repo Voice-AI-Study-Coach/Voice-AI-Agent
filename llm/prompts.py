@@ -4,7 +4,7 @@ from src.exception import CustomException
 from src.logger import logging
 from typing import List
 
-def chunking_prompt(hints, numbered_w, format_instructions):
+def chunking_prompt(hints, numbered_w):
     try:
         return f"""Below is part of a study document with numbered lines.
         Divide it into study sections by topic.
@@ -23,8 +23,6 @@ def chunking_prompt(hints, numbered_w, format_instructions):
 
         DOCUMENT:
         {numbered_w}
-
-        {format_instructions}
         """
     except Exception as e:
         raise CustomException(e, sys)
@@ -35,27 +33,34 @@ DIFFICULTY = """1 = Recall a single fact stated in the text
 4 = Apply the concept to a specific case or example
 5 = Compare two things, or reason about an edge case"""
 
-def build_q_prompt(topic, content, n, format_instructions):
-    return f"""Generate exactly {n} quiz questions from this study material.
+def build_q_prompt(topic, content):
+    return f"""Generate quiz questions from this study material about "{topic}".
 
-Topic: {topic}
+            Difficulty scale:
+            {DIFFICULTY}
 
-Difficulty scale:
-{DIFFICULTY}
+            Produce:
+            - 2 questions at difficulty 1
+            - 2 questions at difficulty 2
+            - 3 questions at difficulty 3
+            - 3 questions at difficulty 4
+            - 2 questions at difficulty 5
 
-Rules:
-- Every question must be answerable from the material below alone
-- Questions are answered ALOUD — no multiple choice, no fill-in-the-blank
-- key_points are the distinct ideas a correct answer must contain, as concepts not exact wording
-- Spread questions across difficulty levels
-- Do not ask about figure labels or diagram text
+            If the material genuinely cannot support a level, produce fewer at that level
+            rather than inventing content not present in the text.
 
-MATERIAL:
-{content}
+            Rules:
+            - Every question must be answerable from the material below alone
+            - Questions are answered ALOUD — no multiple choice, no fill-in-the-blank
+            - key_points are the distinct ideas a correct answer must contain, as concepts not exact wording
+            - Do not ask about figure labels or diagram text
 
-{format_instructions}
-"""
+            Respond with a single JSON object only, no other text, matching exactly this shape:
+            {{"questions": [{{"question": str, "ideal_answer": str, "key_points": [str, ...], "difficulty": int}}]}}
 
+            MATERIAL:
+            {content}
+            """
 
 def grading_system_prompt(format_instructions: str) -> str:
     try:
@@ -128,6 +133,3 @@ def coaching_human_prompt(
         )
     except Exception as e:
         raise CustomException(e, sys)
->>>>>>> d438e8cc04c2adaf40be9d9208fa25594607b645
-=======
->>>>>>> 17be73a8d02110e4ba62f24752ad30224dbadb3a

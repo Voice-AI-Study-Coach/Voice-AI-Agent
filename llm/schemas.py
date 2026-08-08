@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Annotated, Optional
+from typing import List, Literal,Annotated, Optional
 
 class Section(BaseModel):
     start_line: int = Field(description="Line number where this topic starts")
@@ -7,9 +7,6 @@ class Section(BaseModel):
     parent: Optional[str] = Field(default=None, description="Parent topic name, or null")
 
 class Sections(BaseModel):
-<<<<<<< HEAD
-    sections: List[Section]
-=======
     sections: List[Section]
 
 class Question(BaseModel):
@@ -38,4 +35,3 @@ class GradeVerdict(BaseModel):
     class Config:
         extra = 'forbid'
         anystr_strip_whitespace = True
->>>>>>> 96dd823 (Adding the scoring pipeline)

@@ -3,6 +3,7 @@ import sys
 from src.exception import CustomException
 from src.logger import logging
 from typing import List
+
 def chunking_prompt(hints, numbered_w):
     try:
         return f"""Below is part of a study document with numbered lines.
@@ -26,6 +27,40 @@ def chunking_prompt(hints, numbered_w):
     except Exception as e:
         raise CustomException(e, sys)
 
+DIFFICULTY = """1 = Recall a single fact stated in the text
+2 = State a definition or list the parts of something
+3 = Explain how or why something works
+4 = Apply the concept to a specific case or example
+5 = Compare two things, or reason about an edge case"""
+
+def build_q_prompt(topic, content):
+    return f"""Generate quiz questions from this study material about "{topic}".
+
+            Difficulty scale:
+            {DIFFICULTY}
+
+            Produce:
+            - 2 questions at difficulty 1
+            - 2 questions at difficulty 2
+            - 3 questions at difficulty 3
+            - 3 questions at difficulty 4
+            - 2 questions at difficulty 5
+
+            If the material genuinely cannot support a level, produce fewer at that level
+            rather than inventing content not present in the text.
+
+            Rules:
+            - Every question must be answerable from the material below alone
+            - Questions are answered ALOUD — no multiple choice, no fill-in-the-blank
+            - key_points are the distinct ideas a correct answer must contain, as concepts not exact wording
+            - Do not ask about figure labels or diagram text
+
+            Respond with a single JSON object only, no other text, matching exactly this shape:
+            {{"questions": [{{"question": str, "ideal_answer": str, "key_points": [str, ...], "difficulty": int}}]}}
+
+            MATERIAL:
+            {content}
+            """
 
 def grading_system_prompt(format_instructions: str) -> str:
     try:

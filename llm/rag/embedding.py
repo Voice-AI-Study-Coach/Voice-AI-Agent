@@ -1,0 +1,47 @@
+import os
+import sys
+
+from src.exception import CustomException
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from llm.rotation_shifting import gemini_pool, is_rate_limit_error
+from dotenv import load_dotenv
+from models.client import client
+
+load_dotenv()
+
+
+class Embedding:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def _embedder(self):
+        """Build a Gemini embeddings client using a key that isn't rate-limited."""
+        key = gemini_pool.get_key()
+        model = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=key)
+        return key, model
+
+    def generateEmbedding(self):
+        """Embed all chunks in one batch call, rotating keys on rate-limit errors."""
+        try:
+            texts = [c["content"] for c in self.chunks]
+
+            last_exc = None
+            for _ in range(len(gemini_pool._keys)):
+                key, model = self._embedder()
+                try:
+                    vectors = model.embed_documents(texts)
+                    gemini_pool.mark_success(key)
+                    return [
+                        {**chunk, "embedding": vector}
+                        for chunk, vector in zip(self.chunks, vectors)
+                    ]
+                except Exception as e:
+                    if is_rate_limit_error(e):
+                        gemini_pool.mark_rate_limited(key)
+                        last_exc = e
+                        continue
+                    raise
+
+            raise CustomException(last_exc or "All Gemini keys are rate-limited", sys)
+        except Exception as e:
+            raise CustomException(e, sys)

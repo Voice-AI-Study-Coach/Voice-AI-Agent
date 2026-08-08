@@ -62,65 +62,65 @@ class Grading:
 
 QUESTION: {question}
 
-STUDENT ANSWER: {transcript}
+        response = self.llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=human_prompt),
+            ]
+        )
+        return self.parser.parse(response.content)
 
-SOURCE MATERIAL: {source}
-
-IDEAL ANSWER: {ideal}
-
-KEY SEMANTIC POINTS (not keywords - evaluate meaning, not wording):
-{key_points_str}
-
-Evaluate the student's answer against each key semantic point. A student demonstrates understanding of a point if they explain the concept in their own words, even if they use different terminology.
-
-IMPORTANT: Never use keyword matching. Grade based on:
-1. Whether they understand each concept
-2. Whether they can explain it (even differently)
-3. Whether they grasp relationships between ideas
-4. Whether they show correct reasoning
-
-Respond with confidence 0.0-1.0 based on how clearly they demonstrated understanding.
-
-{format_instructions}""",
-                input_variables=["question", "transcript", "source", "ideal", "key_points_str"],
-                partial_variables={"format_instructions": self.parser.get_format_instructions()}
-            )
-            
-            key_points_str = "\n".join([f"- {i+1}. {point}" for i, point in enumerate(key_points)])
-            
-            chain = prompt | self.llm | self.parser
-            
-            verdict = chain.invoke({
-                "question": question_text,
-                "transcript": transcript,
-                "source": source_chunk,
-                "ideal": ideal_answer,
-                "key_points_str": key_points_str
-            })
-            
-            logging.info(f"Graded answer: verdict={verdict.verdict}, confidence={verdict.confidence}")
-            return verdict
-            
-        except Exception as e:
-            logging.error(f"Error grading answer: {str(e)}")
-            raise CustomException(e, sys)
-    
     @staticmethod
     def points_for_verdict(verdict: str) -> float:
-        """Convert verdict to points for scoring.
-        
-        Args:
-            verdict: One of 'correct', 'partial', 'wrong', 'dont_know', 'unclear'
-        
-        Returns:
-            Points: 1.0 for correct, 0.5 for partial, 0.0 otherwise
-            Note: 'unclear' returns 0.0 and doesn't affect score
-        """
-        points_map = {
+        POINTS = {
             "correct": 1.0,
             "partial": 0.5,
             "wrong": 0.0,
             "dont_know": 0.0,
-            "unclear": 0.0
+            "unclear": 0.0,
         }
-        return points_map.get(verdict, 0.0)
+        return POINTS.get(verdict, 0.0)
+
+    @staticmethod
+    def update_score_and_level(previous_score: float, previous_level: int, verdict: str):
+        """Compute new_score and new_level using adaptive formula.
+
+        new_score = 0.7 * previous_score + 0.3 * points_for_verdict(verdict)
+        score clamped to [0.0, 1.0]
+        Level update: >0.75 => +1 (max 5); <0.40 => -1 (min 1); otherwise unchanged.
+        """
+        # defensive defaults
+        if previous_score is None:
+            previous_score = 0.0
+        if previous_level is None:
+            previous_level = 1
+
+        try:
+            prev_s = float(previous_score)
+            if not (0.0 <= prev_s <= 1.0):
+                raise ValueError
+        except Exception:
+            raise ValueError("previous_score must be a number between 0.0 and 1.0")
+
+        try:
+            prev_l = int(previous_level)
+            if not (1 <= prev_l <= 5):
+                raise ValueError
+        except Exception:
+            raise ValueError("previous_level must be an int between 1 and 5")
+
+        pts = Grading.points_for_verdict(verdict)
+        new_score = (0.7 * prev_s) + (0.3 * float(pts))
+        new_score = max(0.0, min(1.0, new_score))
+
+        if new_score > 0.75:
+            new_level = min(5, prev_l + 1)
+        elif new_score < 0.40:
+            new_level = max(1, prev_l - 1)
+        else:
+            new_level = prev_l
+
+        return new_score, new_level
+
+
+

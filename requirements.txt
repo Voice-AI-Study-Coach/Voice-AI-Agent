@@ -9,4 +9,7 @@ langchain-groq
 pymupdf
 pydantic
 dotenv
+openai
+langchain-cerebras
+supabase
 -e .

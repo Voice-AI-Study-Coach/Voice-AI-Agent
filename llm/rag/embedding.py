@@ -2,10 +2,11 @@ import os
 import sys
 
 from src.exception import CustomException
+from src.logger import logging
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from llm.rotation_shifting import gemini_pool, is_rate_limit_error
 from dotenv import load_dotenv
-from models.client import client
+from supabase_client.client import client
 
 load_dotenv()
 
@@ -17,7 +18,7 @@ class Embedding:
     def _embedder(self):
         """Build a Gemini embeddings client using a key that isn't rate-limited."""
         key = gemini_pool.get_key()
-        model = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=key)
+        model = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2", google_api_key=key)
         return key, model
 
     def generateEmbedding(self):

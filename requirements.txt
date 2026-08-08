@@ -12,4 +12,6 @@ dotenv
 openai
 langchain-cerebras
 supabase
+bcrypt
+jwt
 -e .

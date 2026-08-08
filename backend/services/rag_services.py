@@ -1,0 +1,114 @@
+import sys
+import asyncio
+import logging
+
+from datetime import datetime, timezone
+from src.exception import CustomException
+from llm.rag.ingestion import DocumentIngestion
+from llm.rag.chunking import Chunking
+from llm.rag.embedding import Embedding
+from llm.rag.generation import QuestionGenerator
+from supabase_client.client import client
+from backend.utils.rag_utils import insert_chunks, insert_questions
+
+log = logging.getLogger(__name__)
+
+
+async def run_ingestion(document_id: int) -> None:
+    """
+    Full ingestion pipeline. Runs as a FastAPI background task, so it must
+    never raise - any exception is caught and recorded on the document row
+    instead, otherwise the document is left stuck in 'processing' forever
+    with no way for the user to know what happened.
+    """
+    try:
+        set_document_status(document_id=document_id, status="processing")
+
+        # --- 1. read the PDF -------------------------------------------
+        path = get_document_path(document_id)
+        if not path:
+            raise ValueError("Document row is missing its storage_path")
+
+        ingestion = DocumentIngestion(path=path)
+        doc, toc = ingestion.loadDocument()
+
+        full = ""
+        page_starts = []
+        for p in range(doc.page_count):
+            page_starts.append(len(full))
+            full += doc[p].get_text()
+
+        # --- 2. guard: scanned / image-only PDFs ------------------------
+        if len(full.strip()) < 200:
+            raise ValueError(
+                "No extractable text found. This PDF appears to be scanned "
+                "or image-based; please upload a text-based PDF."
+            )
+
+        # --- 3. chunk -----------------------------------------------------
+        chunking = Chunking(doc=doc, toc=toc)
+        chunks = chunking.documentChunking()
+        if not chunks:
+            raise ValueError("Chunking produced no sections from this document")
+
+        log.info("doc %s: %d chunks", document_id, len(chunks))
+
+        # --- 4. embed + generate, concurrently ---------------------------
+        # Independent of each other: both read chunk content, neither reads
+        # the other's output. Embedding takes seconds, generation takes
+        # minutes, so running them together makes the embedding cost
+        # effectively free. generateEmbedding is sync, so it runs in a
+        # thread; generateQuestions is already async.
+        embedder = Embedding(chunks)
+        generator = QuestionGenerator(chunks)
+
+        embedded_chunks, questions = await asyncio.gather(
+            asyncio.to_thread(embedder.generateEmbedding),
+            generator.generateQuestions(),
+        )
+
+        # --- 5. persist ----------------------------------------------------
+        # Chunks first: they must exist before anything references them,
+        # and retrieval/grading is useless without them.
+        insert_chunks(document_id, embedded_chunks)
+
+        if not questions:
+            raise ValueError("Question generation produced no questions")
+        insert_questions(document_id, questions)
+
+        log.info("doc %s: %d questions", document_id, len(questions))
+
+        # --- 6. done ---------------------------------------------------
+        set_document_status(document_id=document_id, status="ready", processed=True)
+
+    except Exception as e:
+        log.exception("ingestion failed for document %s", document_id)
+        set_document_status(document_id=document_id, status="failed", error=str(e)[:500])
+
+
+def get_document_path(document_id):
+    try:
+        response = (
+            client.table("documents")
+            .select("storage_path")
+            .eq("document_id", document_id)
+            .execute()
+        )
+        if not response.data:
+            return None
+        return response.data[0]['storage_path']
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+def set_document_status(document_id: int, status: str, error: str | None = None, processed: bool = False):
+    try:
+        payload = {"status": status}
+        if error is not None:
+            payload["error"] = error
+        if processed:
+            payload["processed_at"] = datetime.now(timezone.utc).isoformat()
+
+        client.table("documents").update(payload).eq("document_id", document_id).execute()
+    except Exception as e:
+        raise CustomException(e, sys)

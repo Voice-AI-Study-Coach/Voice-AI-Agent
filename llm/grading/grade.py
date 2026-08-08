@@ -28,7 +28,8 @@ class Grading:
         self.llm = ChatGroq(
             model=model,
             temperature=0,  # Deterministic for grading
-            groq_api_key=None  # Uses GROQ_API_KEY env var
+            groq_api_key = os.getenv("GROQ_API_KEY") # Uses GROQ_API_KEY env var
+            
         )
         self.parser = PydanticOutputParser(pydantic_object=GradeVerdict)
     

@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import os
 from typing import Any, Dict
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -8,7 +8,7 @@ from llm.prompts import coaching_human_prompt, coaching_system_prompt
 from llm.schemas import GradeVerdict
 
 
-class Coaching:
+class Coach:
     def __init__(self, model: str = 'llama3-8b-8192', temperature: float = 0.5):
         self.llm = ChatGroq(model=model, temperature=temperature)
 
@@ -66,7 +66,7 @@ class Coaching:
         self.llm = ChatGroq(
             model=model,
             temperature=0.5,  # Balanced: not deterministic, not too random
-            groq_api_key=None  # Uses GROQ_API_KEY env var
+            groq_api_key = os.getenv("GROQ_API_KEY") # Uses GROQ_API_KEY env var
         )
     
     def phrase_reaction(self, verdict: GradeVerdict, context: Dict[str, Any]) -> str:

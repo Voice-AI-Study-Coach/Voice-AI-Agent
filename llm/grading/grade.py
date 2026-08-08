@@ -1,47 +1,66 @@
-from __future__ import annotations
+"""Semantic grading engine for evaluating student answers.
 
-from typing import List
+Uses LLM to evaluate answers based on key semantic points, not keyword matching.
+Never uses embeddings, cosine similarity, or string matching for grading.
+"""
 
+from typing import List, Optional
+from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
-from langchain_community.output_parsers import PydanticOutputParser
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import PromptTemplate
 
-from llm.prompts import grading_human_prompt, grading_system_prompt
 from llm.schemas import GradeVerdict
+from src.logger import logging
+from src.exception import CustomException
+import sys
 
 
 class Grading:
-    def __init__(self, model: str = 'llama3-8b-8192', temperature: float = 0.0):
-        self.llm = ChatGroq(model=model, temperature=temperature)
+    """Semantic answer grading using LLM evaluation."""
+    
+    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+        """Initialize grading engine with deterministic LLM.
+        
+        Args:
+            model: Groq model ID. Uses temperature=0 for deterministic output.
+        """
+        self.llm = ChatGroq(
+            model=model,
+            temperature=0,  # Deterministic for grading
+            groq_api_key = os.getenv("GROQ_API_KEY") # Uses GROQ_API_KEY env var
+            
+        )
         self.parser = PydanticOutputParser(pydantic_object=GradeVerdict)
-
+    
     def grade_answer(
         self,
         question_text: str,
         ideal_answer: str,
         key_points: List[str],
         source_chunk: str,
-        transcript: str,
+        transcript: str
     ) -> GradeVerdict:
-        """Grade a spoken answer using the provided source chunk and key points."""
-        if not transcript or not transcript.strip():
-            return GradeVerdict(
-                verdict='unclear',
-                matched_points=[],
-                missed_points=key_points,
-                confidence=0.0,
-                reasoning='Transcript was empty or missing, so the response could not be evaluated clearly.',
-            )
+        """Grade student answer against key semantic points.
+        
+        Args:
+            question_text: The asked question
+            ideal_answer: Complete correct answer
+            key_points: List of 3-5 semantic key points (not keywords)
+            source_chunk: Original source material for context
+            transcript: Student's spoken/transcribed answer
+        
+        Returns:
+            GradeVerdict with verdict, matched_points, missed_points, confidence
+        
+        Raises:
+            CustomException: If grading fails
+        """
+        try:
+            prompt = PromptTemplate(
+                template="""You are an expert tutor grading a student's answer.
 
-        format_instructions = self.parser.get_format_instructions()
-        system_prompt = grading_system_prompt(format_instructions)
-        human_prompt = grading_human_prompt(
-            question_text=question_text,
-            ideal_answer=ideal_answer,
-            key_points=key_points,
-            source_chunk=source_chunk,
-            transcript=transcript,
-        )
+QUESTION: {question}
 
         response = self.llm.invoke(
             [

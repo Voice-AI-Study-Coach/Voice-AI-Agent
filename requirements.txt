@@ -13,5 +13,7 @@ openai
 langchain-cerebras
 supabase
 bcrypt
-jwt
+PyJWT
+python-multipart
+aiofiles
 -e .

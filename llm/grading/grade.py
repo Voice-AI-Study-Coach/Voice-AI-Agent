@@ -4,8 +4,7 @@ Uses LLM to evaluate answers based on key semantic points, not keyword matching.
 Never uses embeddings, cosine similarity, or string matching for grading.
 """
 
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List, Tuple
 from langchain_groq import ChatGroq
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
@@ -19,7 +18,7 @@ import sys
 class Grading:
     """Semantic answer grading using LLM evaluation."""
     
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model: str = "llama3-8b-8192"):
         """Initialize grading engine with deterministic LLM.
         
         Args:
@@ -27,9 +26,7 @@ class Grading:
         """
         self.llm = ChatGroq(
             model=model,
-            temperature=0,  # Deterministic for grading
-            groq_api_key = os.getenv("GROQ_API_KEY") # Uses GROQ_API_KEY env var
-            
+            temperature=0  # Deterministic for grading
         )
         self.parser = PydanticOutputParser(pydantic_object=GradeVerdict)
     
@@ -57,32 +54,56 @@ class Grading:
             CustomException: If grading fails
         """
         try:
-            prompt = PromptTemplate(
-                template="""You are an expert tutor grading a student's answer.
-
-QUESTION: {question}
-
-        response = self.llm.invoke(
-            [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=human_prompt),
-            ]
-        )
-        return self.parser.parse(response.content)
-
+            from llm.prompts import grading_system_prompt, grading_human_prompt
+            
+            format_instructions = self.parser.get_format_instructions()
+            system_prompt = grading_system_prompt(format_instructions)
+            human_prompt = grading_human_prompt(
+                question_text=question_text,
+                ideal_answer=ideal_answer,
+                key_points=key_points,
+                source_chunk=source_chunk,
+                transcript=transcript
+            )
+            
+            from langchain_core.messages import HumanMessage, SystemMessage
+            
+            response = self.llm.invoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=human_prompt),
+                ]
+            )
+            
+            verdict = self.parser.parse(response.content)
+            logging.info(f"Graded answer: verdict={verdict.verdict}, confidence={verdict.confidence}")
+            return verdict
+            
+        except Exception as e:
+            logging.error(f"Error grading answer: {str(e)}")
+            raise CustomException(e, sys)
+    
     @staticmethod
     def points_for_verdict(verdict: str) -> float:
-        POINTS = {
+        """Convert verdict to points for scoring.
+        
+        Args:
+            verdict: One of 'correct', 'partial', 'wrong', 'dont_know', 'unclear'
+        
+        Returns:
+            Points: 1.0 for correct, 0.5 for partial, 0.0 otherwise
+        """
+        points_map = {
             "correct": 1.0,
             "partial": 0.5,
             "wrong": 0.0,
             "dont_know": 0.0,
-            "unclear": 0.0,
+            "unclear": 0.0
         }
-        return POINTS.get(verdict, 0.0)
-
+        return points_map.get(verdict, 0.0)
+    
     @staticmethod
-    def update_score_and_level(previous_score: float, previous_level: int, verdict: str):
+    def update_score_and_level(previous_score: float, previous_level: int, verdict: str) -> Tuple[float, int]:
         """Compute new_score and new_level using adaptive formula.
 
         new_score = 0.7 * previous_score + 0.3 * points_for_verdict(verdict)

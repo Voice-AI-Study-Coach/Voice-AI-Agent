@@ -21,16 +21,20 @@ async def run_ingestion(document_id: int) -> None:
     instead, otherwise the document is left stuck in 'processing' forever
     with no way for the user to know what happened.
     """
+    log.info("run_ingestion: starting document_id=%s", document_id)
     try:
         set_document_status(document_id=document_id, status="processing")
 
         # --- 1. read the PDF -------------------------------------------
         path = get_document_path(document_id)
+        log.debug("run_ingestion: document_id=%s storage_path=%s", document_id, path)
         if not path:
             raise ValueError("Document row is missing its storage_path")
 
         ingestion = DocumentIngestion(path=path)
         doc, toc = ingestion.loadDocument()
+        log.info("run_ingestion: document_id=%s loaded pdf pages=%d toc_entries=%d",
+                  document_id, doc.page_count, len(toc))
 
         full = ""
         page_starts = []
@@ -51,7 +55,7 @@ async def run_ingestion(document_id: int) -> None:
         if not chunks:
             raise ValueError("Chunking produced no sections from this document")
 
-        log.info("doc %s: %d chunks", document_id, len(chunks))
+        log.info("run_ingestion: document_id=%s chunked into %d chunks", document_id, len(chunks))
 
         # --- 4. embed + generate, concurrently ---------------------------
         # Independent of each other: both read chunk content, neither reads
@@ -62,27 +66,31 @@ async def run_ingestion(document_id: int) -> None:
         embedder = Embedding(chunks)
         generator = QuestionGenerator(chunks)
 
+        log.info("run_ingestion: document_id=%s starting embed+generate", document_id)
         embedded_chunks, questions = await asyncio.gather(
             asyncio.to_thread(embedder.generateEmbedding),
             generator.generateQuestions(),
         )
+        log.info("run_ingestion: document_id=%s embed+generate done, embedded=%d questions=%d",
+                  document_id, len(embedded_chunks), len(questions))
 
         # --- 5. persist ----------------------------------------------------
         # Chunks first: they must exist before anything references them,
         # and retrieval/grading is useless without them.
         insert_chunks(document_id, embedded_chunks)
+        log.info("run_ingestion: document_id=%s chunks persisted", document_id)
 
         if not questions:
             raise ValueError("Question generation produced no questions")
         insert_questions(document_id, questions)
-
-        log.info("doc %s: %d questions", document_id, len(questions))
+        log.info("run_ingestion: document_id=%s questions persisted", document_id)
 
         # --- 6. done ---------------------------------------------------
         set_document_status(document_id=document_id, status="ready", processed=True)
+        log.info("run_ingestion: document_id=%s READY", document_id)
 
     except Exception as e:
-        log.exception("ingestion failed for document %s", document_id)
+        log.exception("run_ingestion: FAILED document_id=%s", document_id)
         set_document_status(document_id=document_id, status="failed", error=str(e)[:500])
 
 

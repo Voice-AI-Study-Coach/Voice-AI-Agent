@@ -137,3 +137,15 @@ def insert_questions(document_id: int, questions: list[dict]) -> list[dict]:
         return response.data
     except Exception as e:
         raise CustomException(e, sys)
+
+def load_all_documents(user_id):
+    try:
+        response = (
+            client.table("documents")
+            .select("document_id, filename, status, error, created_at, processed_at")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return response
+    except Exception as e:
+        raise CustomException(e, sys)

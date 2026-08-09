@@ -18,6 +18,21 @@ class GeneratedQuestion(BaseModel):
 class GeneratedQuestions(BaseModel):
     questions: List[GeneratedQuestion] = Field(description="10 to 15 questions spread across difficulty levels 1-5")
 
+class Question(BaseModel):
+    """A question as it comes back OUT of the database.
+
+    Distinct from GeneratedQuestion, which is what the LLM produces: this has
+    the db-assigned question_id, the topic/parent attached at insert time, and
+    uses the column name question_text rather than the schema's `question`.
+    """
+    question_id: int
+    question_text: str
+    ideal_answer: str
+    key_points: List[str]
+    difficulty: int = Field(ge=1, le=5)
+    topic: str
+    parent: Optional[str] = None
+
 class GradeVerdict(BaseModel):
     verdict: Literal['correct', 'partial', 'wrong', 'dont_know', 'unclear']
     matched_points: List[str] = Field(default_factory=list)

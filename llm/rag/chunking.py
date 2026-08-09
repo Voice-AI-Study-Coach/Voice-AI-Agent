@@ -82,7 +82,7 @@ class Chunking:
                 end = secs[i+1].start_line if i+1 < len(secs) else len(lines)
                 content = "\n".join(lines[s.start_line:end]).strip()    
                 if content:
-                    llm_chunks.append({"topic": s.topic, "parent": s.parent, "content": content})
+                    llm_chunks.append({"topic": s.topic.rstrip(": ").strip(), "parent": s.parent.rstrip(": ").strip() if s.parent else None, "content": content})
             return llm_chunks
         except Exception as e:
             raise CustomException(e, sys)

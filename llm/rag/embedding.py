@@ -18,7 +18,14 @@ class Embedding:
     def _embedder(self):
         """Build a Gemini embeddings client using a key that isn't rate-limited."""
         key = gemini_pool.get_key()
-        model = GoogleGenerativeAIEmbeddings(model="gemini-embedding-2", google_api_key=key)
+        # output_dimensionality=768 matches the chunks.embedding vector(768)
+        # column in Supabase; the model's default output is 3072-dim, which
+        # pgvector rejects outright on insert.
+        model = GoogleGenerativeAIEmbeddings(
+            model="gemini-embedding-2",
+            google_api_key=key,
+            output_dimensionality=768,
+        )
         return key, model
 
     def generateEmbedding(self):

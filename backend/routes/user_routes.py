@@ -1,11 +1,12 @@
 import sys
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.requests import Request
 from backend.models.user_schemas import Signup, Login
 from src.exception import CustomException
 from backend.controllers.user_controllers import handleSignupController, handleLoginController, handleLogoutController
+from backend.middlewares.auth_middleware import verify_jwt
 
 user_router = APIRouter()
 
@@ -23,7 +24,7 @@ def login(user: Login):
     except Exception as e:
         raise CustomException(e, sys)
 
-@user_router.delete("/logout")
+@user_router.delete("/logout", dependencies=[Depends(verify_jwt)])
 def logout(request: Request):
     try:
         return handleLogoutController(request=request)

@@ -16,4 +16,5 @@ bcrypt
 PyJWT
 python-multipart
 aiofiles
+pydantic[email]
 -e .

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
 from backend.utils.user_utils import createToken
 from dotenv import load_dotenv
+from backend.utils.user_utils import verify_password
 
 load_dotenv()
 
@@ -39,25 +40,29 @@ def handleLoginController(user):
     try:
         response = (
             client.table("users")
-            .select("email", user.email)
+            .select("user_id, name, email, password")
+            .eq("email", user.email)
             .execute()
         )
         if not response.data:
             raise HTTPException(status_code=404, detail="User not found.Please signup first")
         data = response.data[0]
+        isPasswordCorrect = verify_password(user.password, data['password'])
+        if not isPasswordCorrect:
+            raise HTTPException(status_code=401, detail="Please provide a correct password")
         payload = {
-            "user_id": data['user_id'],
-            "name": data['name'],
-            "email": data['email'],
-            "password": data['password'],
-            "access_token": token,
-            "exp": datetime.datetime.utcnow() + datetime.timedelta(days=36500)
-        }
+                    "user_id": data['user_id'],
+                    "name": data['name'],
+                    "email": data['email'],
+                    "password": data['password'],
+                    "exp": datetime.datetime.utcnow() + datetime.timedelta(days=36500)
+                }
         token = createToken(payload=payload, key=os.environ.get("JWT_SECRET_KEY"), algorithm="HS256")
         json_response = JSONResponse(status_code=200, content={"message": "User logged in successfully", "name": data['name']})
         json_response.set_cookie(
             key='access_token',
-            value=token,httponly=True,
+            value=token,
+            httponly=True,
             max_age=30 * 24 * 60 * 60,  # 30 days in seconds
             samesite="lax",
             path="/"
@@ -71,7 +76,7 @@ def handleLogoutController(request):
         response = (
             client.table("users")
             .select("email")
-            .eq("email", request.email)
+            .eq("email", request.state.user['email'])
             .execute()
         )
         if not response.data:

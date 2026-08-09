@@ -33,9 +33,12 @@ async def main():
     print("Ingestion completed")
     chunking = Chunking(doc=documents[0], toc=documents[1])
     chunks = chunking.documentChunking()
-    print("Chunking completed")
-    embedding = Embedding(chunks=chunks)
-    print(embedding.generateEmbedding())
+    for chunk in chunks:
+        print("\n",chunk)
+        print("\n")
+    # print("Chunking completed")
+    # embedding = Embedding(chunks=chunks)
+    # print(embedding.generateEmbedding())
     # embedding = QuestionGenerator(chunks=chunks)
     # questions = await embedding.generateQuestions()
     # for question in questions:

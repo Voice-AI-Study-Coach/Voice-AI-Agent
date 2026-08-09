@@ -33,6 +33,8 @@ def handleSignupController(user):
         if not response.data:
             raise HTTPException(status_code=500, detail="Something went wrong while inserting the data")
         return JSONResponse(content="User signed up successfully", status_code=201)
+    except HTTPException:
+        raise
     except Exception as e:
         raise CustomException(e, sys)
     
@@ -50,12 +52,15 @@ def handleLoginController(user):
         isPasswordCorrect = verify_password(user.password, data['password'])
         if not isPasswordCorrect:
             raise HTTPException(status_code=401, detail="Please provide a correct password")
+        # The password hash is deliberately NOT in the token: a JWT is only
+        # signed, not encrypted, so anyone holding it can read every claim.
+        # The expiry matches the cookie's max_age below - a token that
+        # outlives its cookie makes /auth/me meaningless as a validity check.
         payload = {
                     "user_id": data['user_id'],
                     "name": data['name'],
                     "email": data['email'],
-                    "password": data['password'],
-                    "exp": datetime.datetime.utcnow() + datetime.timedelta(days=36500)
+                    "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)
                 }
         token = createToken(payload=payload, key=os.environ.get("JWT_SECRET_KEY"), algorithm="HS256")
         json_response = JSONResponse(status_code=200, content={"message": "User logged in successfully", "name": data['name']})
@@ -68,6 +73,24 @@ def handleLoginController(user):
             path="/"
         )
         return json_response
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise CustomException(e, sys)
+
+def handleMeController(request):
+    """The frontend calls this on page load to learn whether the cookie is
+    still valid and who is logged in. verify_jwt has already decoded the token
+    and confirmed the user row exists."""
+    try:
+        user = request.state.user
+        return {
+            "user_id": user["user_id"],
+            "name": user["name"],
+            "email": user["email"],
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise CustomException(e, sys)
 
@@ -84,5 +107,7 @@ def handleLogoutController(request):
         json_response = JSONResponse(status_code=200, content="User logged out successfully")
         json_response.delete_cookie("access_token")
         return json_response
+    except HTTPException:
+        raise
     except Exception as e:
         raise CustomException(e, sys)

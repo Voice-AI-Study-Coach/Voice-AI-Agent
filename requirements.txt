@@ -2,6 +2,9 @@ langchain
 langchain-community
 langchain-classic
 fastapi
+# Pinned: fastapi 0.141 is not compatible with starlette >= 1.0, and an
+# unpinned install resolves to one that breaks routing at import time.
+starlette>=0.47,<0.50
 uvicorn
 langchain-ollama
 langchain-google-genai

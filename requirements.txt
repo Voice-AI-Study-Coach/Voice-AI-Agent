@@ -14,7 +14,8 @@ pydantic
 dotenv
 openai
 langchain-cerebras
-supabase
+psycopg[binary,pool]
+pgvector
 bcrypt
 PyJWT
 python-multipart

@@ -1,0 +1,297 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens
+
+   The palette is warm rather than neutral: paper-white surfaces with a faint
+   amber cast, ink that is brown-black rather than pure black, and a single
+   terracotta accent. Pure #fff on #000 reads as a default stylesheet; a warm
+   ground reads as a considered one, and it is easier on the eyes for a screen
+   a student sits in front of for twenty minutes.
+--------------------------------------------------------------------------- */
+/* Every colour is an alias onto a runtime variable, so a theme swap is a
+   change of ~15 values on :root rather than a `dark:` prefix on every
+   element. Tailwind utilities like `bg-surface` resolve through these. */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-raised: var(--raised);
+
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-ink-ghost: var(--ink-ghost);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-deep: var(--accent-deep);
+
+  --color-weak: var(--weak);
+  --color-weak-soft: var(--weak-soft);
+  --color-mastered: var(--mastered);
+  --color-mastered-soft: var(--mastered-soft);
+
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: var(--font-lora), ui-serif, Georgia, serif;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+/* --------------------------------------------------------------------------
+   Light - warm paper rather than neutral grey. Pure #fff on #000 reads as a
+   default stylesheet; a warm ground reads as a considered one, and it is
+   easier on the eyes for a screen a student sits in front of for 20 minutes.
+--------------------------------------------------------------------------- */
+:root {
+  --paper: #fdfcfa;
+  --surface: #ffffff;
+  --sunken: #f7f5f2;
+  --raised: #f2efea;
+
+  --ink: #1f1d1a;
+  --ink-soft: #55504a;
+  --ink-faint: #8b857d;
+  --ink-ghost: #b5afa6;
+
+  --line: #e8e4dd;
+  --line-strong: #d8d2c8;
+
+  /* Terracotta, close to the warmth of the paper so it sits in the palette
+     rather than on top of it */
+  --accent: #c2603d;
+  --accent-soft: #f5e6e0;
+  --accent-deep: #a04a2c;
+
+  /* Topic states. Deliberately not red/green: this is a study tool, and "you
+     got this wrong" framed as an error feels like a report card. Amber says
+     revisit, sage says settled. */
+  --weak: #b8863b;
+  --weak-soft: #fbf2e2;
+  --mastered: #5d7a5e;
+  --mastered-soft: #eef2ec;
+
+  --danger: #b4453a;
+  --danger-soft: #fbeceb;
+
+  --shadow-color: 31, 29, 26;
+  color-scheme: light;
+}
+
+/* --------------------------------------------------------------------------
+   Dark - warm charcoal, not black. The same hue family as the light theme
+   with lightness inverted, so the two feel like one design rather than two.
+   Accents are lifted in lightness because a mid-tone that reads well on paper
+   goes muddy against a dark ground.
+--------------------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  --paper: #171614;
+  --surface: #1e1d1a;
+  --sunken: #131211;
+  --raised: #2a2825;
+
+  --ink: #f2efe9;
+  --ink-soft: #c2bcb2;
+  --ink-faint: #8f8880;
+  --ink-ghost: #6b655e;
+
+  --line: #2e2b27;
+  --line-strong: #3d3934;
+
+  --accent: #e08258;
+  --accent-soft: #3a2820;
+  --accent-deep: #f0a07c;
+
+  --weak: #d9a959;
+  --weak-soft: #332a18;
+  --mastered: #8aab8c;
+  --mastered-soft: #1e2a1f;
+
+  --danger: #e0776a;
+  --danger-soft: #35201d;
+
+  --shadow-color: 0, 0, 0;
+  color-scheme: dark;
+}
+
+/* --------------------------------------------------------------------------
+   Base
+--------------------------------------------------------------------------- */
+* {
+  border-color: var(--color-line);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "kern", "liga", "calt";
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-deep);
+}
+
+/* Focus rings only for keyboard users - a mouse click on a button should not
+   leave a ring behind. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Elevation
+
+   Named classes rather than inline shadow utilities so the shadow colour
+   follows the theme: a shadow tuned for warm paper is invisible against a
+   dark ground, and one tuned for dark is a smear on light.
+--------------------------------------------------------------------------- */
+.elevate-sm {
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.05);
+}
+.elevate {
+  box-shadow:
+    0 1px 2px rgba(var(--shadow-color), 0.04),
+    0 8px 24px -12px rgba(var(--shadow-color), 0.1);
+}
+.elevate-hover:hover {
+  box-shadow:
+    0 1px 2px rgba(var(--shadow-color), 0.05),
+    0 12px 32px -12px rgba(var(--shadow-color), 0.16);
+}
+.elevate-lg {
+  box-shadow: 0 8px 30px -8px rgba(var(--shadow-color), 0.22);
+}
+.elevate-button {
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.18);
+}
+.elevate-mic {
+  box-shadow: 0 2px 10px -2px rgba(var(--shadow-color), 0.3);
+}
+.elevate-mic-active {
+  box-shadow: 0 4px 16px -4px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbars - thin and unobtrusive, visible on hover
+--------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-ghost);
+  background-clip: content-box;
+}
+
+/* --------------------------------------------------------------------------
+   Motion
+--------------------------------------------------------------------------- */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.25;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-fade-in {
+  animation: fade-in 0.3s ease both;
+}
+.animate-breathe {
+  animation: breathe 3s ease-in-out infinite;
+}
+
+/* Skeleton shimmer for loading states */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--color-raised);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.7),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

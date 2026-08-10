@@ -9,14 +9,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from backend.config import INGESTION_STUCK_MINUTES, SESSION_IDLE_MINUTES
+from backend.db import fetch_all
 from src.exception import CustomException
-from supabase_client.client import client
 
 log = logging.getLogger(__name__)
 
 
-def _cutoff(minutes: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+def _cutoff(minutes: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(minutes=minutes)
 
 
 def reap_stuck_documents() -> int:
@@ -26,17 +26,18 @@ def reap_stuck_documents() -> int:
     status that will never change.
     """
     try:
-        response = (
-            client.table("documents")
-            .update({
-                "status": "failed",
-                "error": "Ingestion did not complete (server restarted)",
-            })
-            .eq("status", "processing")
-            .lt("created_at", _cutoff(INGESTION_STUCK_MINUTES))
-            .execute()
+        # RETURNING gives an exact affected-row count without a second query.
+        rows = fetch_all(
+            """
+            update documents set
+                status = 'failed',
+                error = 'Ingestion did not complete (server restarted)'
+            where status = 'processing' and created_at < %s
+            returning document_id
+            """,
+            (_cutoff(INGESTION_STUCK_MINUTES),),
         )
-        count = len(response.data or [])
+        count = len(rows)
         if count:
             log.info("reaper: marked %d stuck document(s) as failed", count)
         return count
@@ -51,15 +52,16 @@ def reap_abandoned_sessions() -> int:
     that is still being answered is never killed.
     """
     try:
-        now = datetime.now(timezone.utc).isoformat()
-        response = (
-            client.table("sessions")
-            .update({"status": "abandoned", "ended_at": now})
-            .eq("status", "active")
-            .lt("last_activity_at", _cutoff(SESSION_IDLE_MINUTES))
-            .execute()
+        now = datetime.now(timezone.utc)
+        rows = fetch_all(
+            """
+            update sessions set status = 'abandoned', ended_at = %s
+            where status = 'active' and last_activity_at < %s
+            returning session_id
+            """,
+            (now, _cutoff(SESSION_IDLE_MINUTES)),
         )
-        count = len(response.data or [])
+        count = len(rows)
         if count:
             log.info("reaper: marked %d abandoned session(s)", count)
         return count

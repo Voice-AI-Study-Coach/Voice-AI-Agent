@@ -4,7 +4,7 @@ import os
 import datetime
 
 from src.exception import CustomException
-from supabase_client.client import client
+from backend.db import fetch_one, execute_returning
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException
 from backend.utils.user_utils import createToken
@@ -15,40 +15,32 @@ load_dotenv()
 
 def handleSignupController(user):
     try:
-        response = (
-            client.table("users")
-            .select("email")
-            .eq("email", user.email)
-            .execute()
-        )
-        if response.data:
+        existing = fetch_one("select email from users where email = %s", (user.email,))
+        if existing:
             raise HTTPException(status_code=409, detail="The user already exists")
         hashed_password = bcrypt.hashpw(password=user.password.encode(), salt=bcrypt.gensalt(rounds=15))
         decoded_password = hashed_password.decode()
-        response = (
-            client.table("users")
-            .insert({"name": user.name, "email": user.email, "password": decoded_password})
-            .execute()
+        row = execute_returning(
+            "insert into users (name, email, password) values (%s, %s, %s) "
+            "returning user_id",
+            (user.name, user.email, decoded_password),
         )
-        if not response.data:
+        if not row:
             raise HTTPException(status_code=500, detail="Something went wrong while inserting the data")
         return JSONResponse(content="User signed up successfully", status_code=201)
     except HTTPException:
         raise
     except Exception as e:
         raise CustomException(e, sys)
-    
+
 def handleLoginController(user):
     try:
-        response = (
-            client.table("users")
-            .select("user_id, name, email, password")
-            .eq("email", user.email)
-            .execute()
+        data = fetch_one(
+            "select user_id, name, email, password from users where email = %s",
+            (user.email,),
         )
-        if not response.data:
+        if not data:
             raise HTTPException(status_code=404, detail="User not found.Please signup first")
-        data = response.data[0]
         isPasswordCorrect = verify_password(user.password, data['password'])
         if not isPasswordCorrect:
             raise HTTPException(status_code=401, detail="Please provide a correct password")
@@ -96,13 +88,11 @@ def handleMeController(request):
 
 def handleLogoutController(request):
     try:
-        response = (
-            client.table("users")
-            .select("email")
-            .eq("email", request.state.user['email'])
-            .execute()
+        existing = fetch_one(
+            "select email from users where email = %s",
+            (request.state.user['email'],),
         )
-        if not response.data:
+        if not existing:
             raise HTTPException(status_code=404, detail="User not found.Please login first")
         json_response = JSONResponse(status_code=200, content="User logged out successfully")
         json_response.delete_cookie("access_token")

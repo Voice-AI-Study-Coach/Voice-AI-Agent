@@ -8,7 +8,7 @@ from llm.rag.ingestion import DocumentIngestion
 from llm.rag.chunking import Chunking
 from llm.rag.embedding import Embedding
 from llm.rag.generation import QuestionGenerator
-from supabase_client.client import client
+from backend.db import execute, fetch_one
 from backend.utils.rag_utils import insert_chunks, insert_questions
 
 log = logging.getLogger(__name__)
@@ -96,27 +96,26 @@ async def run_ingestion(document_id: int) -> None:
 
 def get_document_path(document_id):
     try:
-        response = (
-            client.table("documents")
-            .select("storage_path")
-            .eq("document_id", document_id)
-            .execute()
+        row = fetch_one(
+            "select storage_path from documents where document_id = %s",
+            (document_id,),
         )
-        if not response.data:
-            return None
-        return response.data[0]['storage_path']
+        return row["storage_path"] if row else None
     except Exception as e:
         raise CustomException(e, sys)
 
 
 def set_document_status(document_id: int, status: str, error: str | None = None, processed: bool = False):
     try:
-        payload = {"status": status}
-        if error is not None:
-            payload["error"] = error
-        if processed:
-            payload["processed_at"] = datetime.now(timezone.utc).isoformat()
-
-        client.table("documents").update(payload).eq("document_id", document_id).execute()
+        execute(
+            """
+            update documents set
+                status = %s,
+                error = coalesce(%s, error),
+                processed_at = case when %s then %s else processed_at end
+            where document_id = %s
+            """,
+            (status, error, processed, datetime.now(timezone.utc), document_id),
+        )
     except Exception as e:
         raise CustomException(e, sys)

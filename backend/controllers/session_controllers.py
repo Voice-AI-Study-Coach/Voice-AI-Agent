@@ -9,6 +9,7 @@ import logging
 import sys
 import time
 from typing import Any, Dict, List
+from datetime import datetime
 
 from fastapi.requests import Request
 from fastapi.exceptions import HTTPException
@@ -20,15 +21,19 @@ from backend.utils.rag_utils import (
     getAllTurnsTopics,
 )
 from backend.utils.session_utils import (
+    delete_turn,
     get_open_turn,
     get_question,
+    get_prior_topic_results,
     get_session_for_user,
     get_session_turns,
+    get_sessions_for_document,
     get_topic_source_material,
     insert_session,
     insert_turn_asked,
     pick_question,
     save_summary_text,
+    touch_session,
     update_session,
     update_turn_answered,
 )
@@ -237,6 +242,112 @@ async def handleSubmitAnswer(request: Request, session_id: int, payload) -> Dict
         raise CustomException(e, sys)
 
 
+def handleListSessions(request: Request, document_id: int) -> List[Dict[str, Any]]:
+    """GET /sessions?document_id=N - past sessions on one document, newest
+    first. Feeds the sidebar, which nests them under each filename."""
+    try:
+        user_id = request.state.user["user_id"]
+
+        # Ownership is checked on the document rather than the sessions: the
+        # session query filters on user_id anyway, but a 404 here keeps a
+        # guessed document_id from being distinguishable from an empty one.
+        doc = get_document_for_user(document_id=document_id, user_id=user_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        return get_sessions_for_document(user_id=user_id, document_id=document_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("handleListSessions: failed document_id=%s", document_id)
+        raise CustomException(e, sys)
+
+
+def handleSkipQuestion(request: Request, session_id: int, payload) -> Dict[str, Any]:
+    """POST /sessions/{id}/skip - the student went quiet and was asked whether
+    to move on.
+
+    Silence is not an answer, so a skip is free: it does not score, does not
+    consume one of the topic's questions, and does not touch the level. The
+    unanswered turn row is deleted rather than graded, which also returns the
+    question to the pool - they never really saw it through, so retiring it
+    would quietly shrink the bank.
+
+    The replies are fixed strings, not an LLM call: they are short, entirely
+    predictable, and a student sitting in silence should not wait on a model.
+    """
+    try:
+        user_id = request.state.user["user_id"]
+
+        session = get_session_for_user(session_id=session_id, user_id=user_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session["status"] != "active":
+            raise HTTPException(status_code=409, detail="Session is not active")
+
+        turn = get_open_turn(session_id)
+        if turn is None:
+            raise HTTPException(
+                status_code=409, detail="No question is currently awaiting an answer"
+            )
+
+        # Declined: leave everything exactly as it is and let them keep thinking.
+        if not payload.accepted:
+            touch_session(session_id)
+            return {
+                "coach_reply": "Okay, no problem, take your time.",
+                "skipped": False,
+                "current_topic": session["current_topic"],
+                "next_question": None,
+            }
+
+        # Accepted: retire this turn and draw a replacement on the same topic
+        # and level.
+        delete_turn(turn["turn_id"])
+
+        # Excluded explicitly: deleting the turn puts this question back in
+        # the pool immediately, and drawing it again is not a skip.
+        nq = pick_question(
+            document_id=session["document_id"],
+            session_id=session_id,
+            topic=session["current_topic"],
+            level=session["level"],
+            exclude_ids=[turn["question_id"]],
+        )
+        if nq is None:
+            # Nothing else to ask on this topic. Put the original turn back so
+            # the session still has a question awaiting an answer rather than
+            # stranding the student with nothing on screen.
+            question = get_question(turn["question_id"])
+            if question is not None:
+                restored = insert_turn_asked(session_id, question, turn["level_at_ask"])
+                return {
+                    "coach_reply": "That is the only question left on this topic, so let us stay with it.",
+                    "skipped": False,
+                    "current_topic": session["current_topic"],
+                    "next_question": _question_out(question, restored["turn_index"]),
+                }
+            raise HTTPException(status_code=409, detail="No questions available to move on to")
+
+        next_turn = insert_turn_asked(session_id, nq, session["level"])
+        touch_session(session_id)
+
+        log.info("handleSkipQuestion: session_id=%s skipped question_id=%s",
+                 session_id, turn["question_id"])
+
+        return {
+            "coach_reply": "No problem, let us try a different one.",
+            "skipped": True,
+            "current_topic": session["current_topic"],
+            "next_question": _question_out(nq, next_turn["turn_index"]),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("handleSkipQuestion: failed session_id=%s", session_id)
+        raise CustomException(e, sys)
+
+
 def handleGetSession(request: Request, session_id: int) -> Dict[str, Any]:
     """GET /sessions/{id} - replay a past session."""
     try:
@@ -286,8 +397,6 @@ def handleGetSession(request: Request, session_id: int) -> Dict[str, Any]:
 
 
 def _duration_seconds(session: Dict[str, Any]):
-    from datetime import datetime
-
     started, ended = session.get("started_at"), session.get("ended_at")
     if not started or not ended:
         return None
@@ -332,20 +441,46 @@ async def handleSessionSummary(request: Request, session_id: int) -> Dict[str, A
                 stats["missed"] += 1
             parents.setdefault(topic, None)
 
-        topic_results = [
-            {
+        # How the same topics went in this user's earlier sessions on this
+        # document, so a revisited topic can be reported as better or worse
+        # rather than as an isolated score.
+        prior = get_prior_topic_results(
+            user_id=user_id, document_id=document_id, exclude_session_id=session_id
+        )
+
+        topic_results = []
+        for topic, s in by_topic.items():
+            accuracy = s["correct"] / s["asked"] if s["asked"] else 0.0
+            before = prior.get(topic)
+            prev_accuracy = (
+                before["correct"] / before["asked"]
+                if before and before["asked"]
+                else None
+            )
+            topic_results.append({
                 "topic": topic,
                 "parent": parents.get(topic),
                 "asked": s["asked"],
                 "correct": s["correct"],
                 "partial": s["partial"],
                 "missed": s["missed"],
-                "accuracy": s["correct"] / s["asked"] if s["asked"] else 0.0,
-            }
-            for topic, s in by_topic.items()
-        ]
+                "accuracy": accuracy,
+                "previous_accuracy": prev_accuracy,
+                "previous_correct": before["correct"] if before else None,
+                "previous_asked": before["asked"] if before else None,
+                # None, not False, when there is nothing to compare against.
+                "improved": accuracy > prev_accuracy if prev_accuracy is not None else None,
+            })
+
         # Weakest first: the most actionable information belongs at the top.
         topic_results.sort(key=lambda t: t["accuracy"])
+        has_comparison = any(t["previous_accuracy"] is not None for t in topic_results)
+
+        # Median, not mean: a single slow call while a key was cooling down
+        # would drag an average somewhere unrepresentative.
+        grade_times = sorted(r["grade_ms"] for r in rows if r.get("grade_ms"))
+        stt_times = sorted(r["stt_ms"] for r in rows if r.get("stt_ms"))
+        median = lambda xs: int(xs[len(xs) // 2]) if xs else None
 
         total_asked = sum(t["asked"] for t in topic_results)
         total_correct = sum(t["correct"] for t in topic_results)
@@ -380,6 +515,9 @@ async def handleSessionSummary(request: Request, session_id: int) -> Dict[str, A
             ],
             "narrative": narrative,
             "remaining_topics": remaining_topics,
+            "avg_response_ms": median(grade_times),
+            "avg_stt_ms": median(stt_times),
+            "has_comparison": has_comparison,
         }
     except HTTPException:
         raise
@@ -397,16 +535,24 @@ async def _generate_narrative(topic_results, total_asked: int, total_correct: in
 
         from llm.rotation_shifting import groq_pool
 
-        lines = "\n".join(
-            f"- {t['topic']}: {t['correct']}/{t['asked']} correct" for t in topic_results
-        )
+        def describe(t):
+            line = f"- {t['topic']}: {t['correct']}/{t['asked']} correct"
+            if t.get("previous_asked"):
+                line += (
+                    f" (last time {t['previous_correct']}/{t['previous_asked']})"
+                )
+            return line
+
+        lines = "\n".join(describe(t) for t in topic_results)
         key = groq_pool.get_key()
         llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.4, api_key=key)
         response = await llm.ainvoke([
             SystemMessage(content=(
                 "You are a study coach summarising a completed quiz session. "
                 "Write 2-3 plain sentences, spoken style, no markdown or bullet points. "
-                "Name the strongest and weakest topics and suggest what to revisit."
+                "Name the strongest and weakest topics and suggest what to revisit. "
+                "Where a previous score is given, say plainly whether they improved "
+                "on that topic, and be encouraging about progress."
             )),
             HumanMessage(content=f"Overall: {total_correct}/{total_asked} correct.\n\n{lines}"),
         ])

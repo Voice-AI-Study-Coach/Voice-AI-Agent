@@ -6,7 +6,7 @@ from src.exception import CustomException
 from dotenv import load_dotenv
 from fastapi import HTTPException
 from fastapi.requests import Request
-from supabase_client.client import client
+from backend.db import fetch_one
 
 def verify_jwt(request: Request):
     try:
@@ -24,15 +24,13 @@ def verify_jwt(request: Request):
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401, detail="Invalid or expired access token")
 
-        user = (
-            client.table("users")
-            .select("user_id, name, email")
-            .eq("user_id", decodedToken['user_id'])
-            .execute()
+        user = fetch_one(
+            "select user_id, name, email from users where user_id = %s",
+            (decodedToken['user_id'],),
         )
-        if not user.data:
+        if not user:
             raise HTTPException(status_code=401, detail="Invalid access token")
-        request.state.user = user.data[0]
+        request.state.user = user
     except HTTPException:
         raise
     except Exception as e:

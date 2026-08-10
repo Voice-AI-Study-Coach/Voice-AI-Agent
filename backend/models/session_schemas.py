@@ -1,5 +1,13 @@
+from datetime import datetime
 from pydantic import BaseModel, Field
 from typing import List, Optional
+
+# psycopg returns timestamp columns as native datetime objects (the old
+# Supabase/PostgREST client always serialised to ISO strings first). Response
+# fields that carry a DB timestamp accept either so FastAPI's response
+# validation does not reject a raw datetime - Pydantic still renders both as
+# the same ISO 8601 string in the JSON body.
+Timestamp = Optional[datetime | str]
 
 
 class StartSession(BaseModel):
@@ -50,6 +58,31 @@ class AnswerResponse(BaseModel):
     next_question: Optional[QuestionOut] = None
 
 
+class SessionListItem(BaseModel):
+    """One row in the sidebar's list of past sessions on a document."""
+    session_id: int
+    status: str
+    questions_asked: int
+    correct_count: int
+    started_at: Timestamp = None
+    ended_at: Timestamp = None
+
+
+class SkipRequest(BaseModel):
+    # The frontend detects the silence (only the browser knows the mic has
+    # been quiet) and asks "Shall we move to another question?". This carries
+    # the student's reply back.
+    accepted: bool = Field(description="True if the student agreed to move on")
+
+
+class SkipResponse(BaseModel):
+    coach_reply: str
+    skipped: bool
+    current_topic: str
+    # Null when they declined - the original question stays on screen.
+    next_question: Optional[QuestionOut] = None
+
+
 class TurnOut(BaseModel):
     turn_index: int
     topic: str
@@ -62,7 +95,7 @@ class TurnOut(BaseModel):
     missed_points: List[str] = []
     coach_reply: Optional[str] = None
     level_at_ask: int
-    asked_at: Optional[str] = None
+    asked_at: Timestamp = None
 
 
 class SessionReplayResponse(BaseModel):
@@ -73,8 +106,8 @@ class SessionReplayResponse(BaseModel):
     selected_topics: List[str]
     questions_asked: int
     correct_count: int
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    started_at: Timestamp = None
+    ended_at: Timestamp = None
     turns: List[TurnOut]
 
 
@@ -86,6 +119,16 @@ class TopicResult(BaseModel):
     partial: int
     missed: int
     accuracy: float
+
+    # Comparison against this user's earlier sessions on the same document.
+    # All None when the topic has never been attempted before, which is the
+    # difference between "no change" and "nothing to compare against".
+    previous_accuracy: Optional[float] = None
+    previous_correct: Optional[int] = None
+    previous_asked: Optional[int] = None
+    improved: Optional[bool] = Field(
+        default=None, description="True if accuracy rose since the last attempt"
+    )
 
 
 class SummaryResponse(BaseModel):
@@ -100,3 +143,16 @@ class SummaryResponse(BaseModel):
     weak_topics: List[str]
     narrative: Optional[str] = None
     remaining_topics: List[str]           # powers the "continue?" prompt
+
+    # Median rather than mean: one slow call while a key was rate-limited
+    # would drag an average somewhere unrepresentative.
+    avg_response_ms: Optional[int] = Field(
+        default=None, description="Median grading latency across answered turns"
+    )
+    avg_stt_ms: Optional[int] = Field(
+        default=None, description="Median speech-to-text latency, null until audio exists"
+    )
+
+    # True when this session revisited a topic the user had attempted before,
+    # so the UI knows to show the comparison at all.
+    has_comparison: bool = False

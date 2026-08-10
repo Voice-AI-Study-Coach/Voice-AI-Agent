@@ -1,4 +1,5 @@
 import sys
+from typing import List
 
 from fastapi import APIRouter, Depends
 from fastapi.requests import Request
@@ -7,15 +8,20 @@ from fastapi.exceptions import HTTPException
 from src.exception import CustomException
 from backend.controllers.session_controllers import (
     handleGetSession,
+    handleListSessions,
     handleSession,
     handleSessionSummary,
+    handleSkipQuestion,
     handleSubmitAnswer,
 )
 from backend.middlewares.auth_middleware import verify_jwt
 from backend.models.session_schemas import (
     AnswerRequest,
     AnswerResponse,
+    SessionListItem,
     SessionReplayResponse,
+    SkipRequest,
+    SkipResponse,
     StartSession,
     StartSessionResponse,
     SummaryResponse,
@@ -42,6 +48,29 @@ async def submitAnswer(request: Request, session_id: int, answer: AnswerRequest)
         return await handleSubmitAnswer(
             request=request, session_id=session_id, payload=answer
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+@session_router.get("/sessions", response_model=List[SessionListItem])
+def listSessions(request: Request, document_id: int):
+    """Past sessions on one document, newest first. Feeds the sidebar."""
+    try:
+        return handleListSessions(request=request, document_id=document_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+@session_router.post("/sessions/{session_id}/skip", response_model=SkipResponse)
+def skipQuestion(request: Request, session_id: int, skip: SkipRequest):
+    """The student went quiet and was asked whether to move on. accepted=true
+    draws a different question; accepted=false leaves the current one in place."""
+    try:
+        return handleSkipQuestion(request=request, session_id=session_id, payload=skip)
     except HTTPException:
         raise
     except Exception as e:

@@ -6,7 +6,6 @@ from src.logger import logging
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from llm.rotation_shifting import gemini_pool, is_rate_limit_error
 from dotenv import load_dotenv
-from supabase_client.client import client
 
 load_dotenv()
 
@@ -19,8 +18,8 @@ class Embedding:
         """Build a Gemini embeddings client using a key that isn't rate-limited."""
         key = gemini_pool.get_key()
         # output_dimensionality=768 matches the chunks.embedding vector(768)
-        # column in Supabase; the model's default output is 3072-dim, which
-        # pgvector rejects outright on insert.
+        # column; the model's default output is 3072-dim, which pgvector
+        # rejects outright on insert.
         model = GoogleGenerativeAIEmbeddings(
             model="gemini-embedding-2",
             google_api_key=key,

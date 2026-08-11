@@ -156,12 +156,14 @@ export default function QuizPage() {
     try {
       const stt = createStt({
         onLevel: setLevel01,
+        onPartial: setDraft,
         onSilenceTimeout: () => setSilencePrompt(true),
         onError: (e) => setError(e.message),
       });
       sttRef.current = stt;
       await stt.start();
       setPhase("recording");
+      setDraft("");
     } catch {
       // Speech is not implemented yet - fall back rather than dead-ending.
       setTyping(true);
@@ -175,6 +177,7 @@ export default function QuizPage() {
     setPhase("grading");
     try {
       const { transcript, durationMs } = await stt.stop();
+      setDraft(transcript);
       await submit(transcript, durationMs);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not transcribe");
@@ -302,6 +305,13 @@ export default function QuizPage() {
                   />
                 )}
               </div>
+
+              {phase === "recording" && draft && (
+                <div className="mt-6 rounded-2xl border border-accent/30 bg-accent-soft px-4 py-3 text-[13px] leading-relaxed text-ink">
+                  <span className="font-medium text-ink-faint">Live transcript:</span>{" "}
+                  {draft}
+                </div>
+              )}
 
               {error && (
                 <div className="mt-6">

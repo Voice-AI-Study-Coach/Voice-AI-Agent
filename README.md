@@ -398,8 +398,9 @@ The app is now live at `http://localhost:3000`.
 
 ### 👤 Author
 
-**Shiva**
-📧 shivachatti190@gmail.com
+**Shiva**: 📧 shivachatti190@gmail.com
+
+**Shiva Kumar**: 📧 mshivakumar1289@gmail.com
 
 <sub>Built with FastAPI, LangChain, Groq, Gemini, Supabase & Next.js</sub>
 

@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { QUESTIONS_PER_TOPIC, SILENCE_PROMPT_MS } from "@/lib/config";
+import { MIN_ANSWER_MS, QUESTIONS_PER_TOPIC } from "@/lib/config";
 import { STT_AVAILABLE, createStt } from "@/lib/speech/stt";
-import { TTS_AVAILABLE, speak } from "@/lib/speech/tts";
+import { TTS_AVAILABLE, speak, stopSpeaking } from "@/lib/speech/tts";
+import { SttUnavailableError } from "@/lib/speech/types";
 import type { SttHandle } from "@/lib/speech/types";
 import type { AnswerResponse, QuestionOut, Verdict } from "@/lib/types";
 import { Button, cx, ErrorNote, Pill, Spinner } from "@/components/ui";
@@ -35,10 +36,13 @@ export default function QuizPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // Silence handling: the browser owns the timer because only it can tell the
-  // mic has gone quiet - the backend simply never receives a request.
+  // Silence handling: "Shall we move to another question?" only fires from
+  // inside an active recording (stt.ts's own silence timer, reset on real
+  // speech via the mic level meter) - never while merely idle/thinking. An
+  // idle-phase countdown used to start the moment a question loaded, before
+  // the student had even tapped the mic or finished hearing it read aloud,
+  // so it could fire before they had a chance to answer at all.
   const [silencePrompt, setSilencePrompt] = useState(false);
-  const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Typed fallback. Present because speech is not implemented yet; remove the
   // toggle once STT_AVAILABLE flips to true.
@@ -47,6 +51,18 @@ export default function QuizPage() {
 
   const sttRef = useRef<SttHandle | null>(null);
   const [level01, setLevel01] = useState(0);
+
+  // Seconds elapsed while recording. Transcription now happens after the
+  // student stops, so without this the mic gives no sign it is actually
+  // capturing - which led to answers being cut off after barely a second.
+  const [recordSecs, setRecordSecs] = useState(0);
+  const recordStartedAt = useRef(0);
+
+  // Consecutive 'unclear' verdicts from the mic. Two in a row means speech
+  // capture is not working for this student right now, and re-asking the same
+  // question a third time just traps them in a loop with no way out - so the
+  // UI falls back to typing instead. Reset by any answer that grades normally.
+  const unclearStreak = useRef(0);
 
   /* ---- load the session's current question ------------------------------ */
   useEffect(() => {
@@ -84,57 +100,79 @@ export default function QuizPage() {
   }, [sessionId, router]);
 
   /* ---- speak each new question, when TTS exists ------------------------- */
+  // Keyed on the question TEXT, not the object: an 'unclear' retry re-serves
+  // the same question as a fresh object, and keying on the object would make
+  // the coach read the question aloud again on every failed attempt - which
+  // then talks over the student's next answer and empties that transcript too.
+  const questionText = question?.question_text;
   useEffect(() => {
-    if (!question || !TTS_AVAILABLE) return;
-    const handle = speak(question.question_text);
+    if (!questionText || !TTS_AVAILABLE) return;
+    const handle = speak(questionText);
     return () => handle.cancel();
-  }, [question]);
+  }, [questionText]);
 
-  /* ---- silence timer ----------------------------------------------------- */
-  const clearSilence = useCallback(() => {
-    if (silenceTimer.current) clearTimeout(silenceTimer.current);
-    silenceTimer.current = null;
-  }, []);
-
-  const armSilence = useCallback(() => {
-    clearSilence();
-    silenceTimer.current = setTimeout(
-      () => setSilencePrompt(true),
-      SILENCE_PROMPT_MS,
-    );
-  }, [clearSilence]);
-
+  /* ---- recording timer --------------------------------------------------- */
   useEffect(() => {
-    // Only run the timer while a question is genuinely waiting on the student.
-    if (phase === "idle" && question && !typing && !silencePrompt) armSilence();
-    else clearSilence();
-    return clearSilence;
-  }, [phase, question, typing, silencePrompt, armSilence, clearSilence]);
+    if (phase !== "recording") {
+      setRecordSecs(0);
+      return;
+    }
+    const id = setInterval(() => {
+      setRecordSecs(Math.floor((Date.now() - recordStartedAt.current) / 1000));
+    }, 250);
+    return () => clearInterval(id);
+  }, [phase]);
 
   /* ---- submit ------------------------------------------------------------ */
   const submit = useCallback(
     async (transcript: string, sttMs?: number) => {
-      clearSilence();
       setSilencePrompt(false);
       setPhase("grading");
       setError("");
       try {
         const res = await api.answer(sessionId, transcript, sttMs);
-        setFeedback(res);
-        setPhase("feedback");
         setAsked(res.questions_asked);
         setCorrect(res.correct_count);
         setLevel(res.level);
         setTopic(res.current_topic);
         setDraft("");
 
+        if (res.verdict === "unclear" && res.next_question) {
+          // STT failed to catch anything - the backend re-serves the SAME
+          // question rather than advancing. Going through the feedback
+          // screen here would force an extra "Next question" tap just to
+          // get the mic back; instead drop straight back to answering it.
+          unclearStreak.current += 1;
+          setQuestion(res.next_question);
+          setFeedback(null);
+          setPhase("idle");
+
+          if (unclearStreak.current >= 2) {
+            // Speech capture is not working. Re-asking a third time would
+            // trap the student in a loop, so hand them the keyboard and say
+            // so plainly rather than repeating "I could not make that out".
+            unclearStreak.current = 0;
+            setTyping(true);
+            setError(
+              "The microphone is not picking up your answer, so you can type it instead.",
+            );
+            return;
+          }
+
+          if (TTS_AVAILABLE) speak(res.coach_reply);
+          return;
+        }
+
+        unclearStreak.current = 0;
         if (TTS_AVAILABLE) speak(res.coach_reply);
+        setFeedback(res);
+        setPhase("feedback");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not submit answer");
         setPhase("idle");
       }
     },
-    [sessionId, clearSilence],
+    [sessionId],
   );
 
   /* ---- continue to the next question ------------------------------------ */
@@ -151,29 +189,63 @@ export default function QuizPage() {
 
   /* ---- mic --------------------------------------------------------------- */
   async function startRecording() {
-    clearSilence();
     setError("");
+    // Stop the coach mid-sentence so the recording does not capture the
+    // question being read aloud back into the student's own answer.
+    stopSpeaking();
     try {
       const stt = createStt({
         onLevel: setLevel01,
         onPartial: setDraft,
         onSilenceTimeout: () => setSilencePrompt(true),
-        onError: (e) => setError(e.message),
+        onError: (e) => {
+          if (e instanceof SttUnavailableError) {
+            // Recording is impossible here (no microphone, permission
+            // denied, or a browser that cannot record). Leaving the student
+            // on a dead mic just loops "I could not make that out", so hand
+            // them the keyboard and say why.
+            sttRef.current = null;
+            setLevel01(0);
+            setTyping(true);
+            setPhase("idle");
+            setError(`${e.message}. You can type your answer instead.`);
+            return;
+          }
+          setError(e.message);
+        },
       });
       sttRef.current = stt;
       await stt.start();
+      recordStartedAt.current = Date.now();
+      setRecordSecs(0);
       setPhase("recording");
       setDraft("");
-    } catch {
-      // Speech is not implemented yet - fall back rather than dead-ending.
+    } catch (err) {
+      // Starting failed outright (permission denied, engine unavailable).
+      // Fall back to typing rather than dead-ending, but surface the real
+      // reason - "not available yet" hid genuine permission errors.
+      sttRef.current = null;
       setTyping(true);
-      setError("Voice input is not available yet. You can type instead.");
+      setError(
+        err instanceof Error
+          ? `${err.message}. You can type your answer instead.`
+          : "Voice input is not available. You can type instead.",
+      );
     }
   }
 
   async function stopRecording() {
     const stt = sttRef.current;
     if (!stt) return;
+
+    // A stop this soon after starting is a mis-tap, not a finished answer:
+    // there is not enough audio in it to transcribe, and submitting it just
+    // returns "I could not make that out" and re-asks the same question.
+    if (Date.now() - recordStartedAt.current < MIN_ANSWER_MS) {
+      setError("Give it a moment - keep speaking, then tap again when you are done.");
+      return;
+    }
+
     setPhase("grading");
     try {
       const { transcript, durationMs } = await stt.stop();
@@ -299,6 +371,7 @@ export default function QuizPage() {
                   <MicControl
                     recording={phase === "recording"}
                     level={level01}
+                    seconds={recordSecs}
                     onStart={startRecording}
                     onStop={stopRecording}
                     onSwitchToTyping={() => setTyping(true)}
@@ -306,9 +379,9 @@ export default function QuizPage() {
                 )}
               </div>
 
-              {phase === "recording" && draft && (
+              {phase === "feedback" && draft && (
                 <div className="mt-6 rounded-2xl border border-accent/30 bg-accent-soft px-4 py-3 text-[13px] leading-relaxed text-ink">
-                  <span className="font-medium text-ink-faint">Live transcript:</span>{" "}
+                  <span className="font-medium text-ink-faint">You said:</span>{" "}
                   {draft}
                 </div>
               )}
@@ -331,12 +404,14 @@ export default function QuizPage() {
 function MicControl({
   recording,
   level,
+  seconds,
   onStart,
   onStop,
   onSwitchToTyping,
 }: {
   recording: boolean;
   level: number;
+  seconds: number;
   onStart: () => void;
   onStop: () => void;
   onSwitchToTyping: () => void;
@@ -372,9 +447,24 @@ function MicControl({
         </span>
       </button>
 
-      <p className="text-[13px] text-ink-faint">
-        {recording ? "Listening — tap when you are done" : "Tap to answer"}
-      </p>
+      {recording ? (
+        <div className="flex flex-col items-center gap-1.5">
+          <div className="flex items-center gap-2">
+            <span className="size-1.5 rounded-full bg-danger animate-pulse" />
+            {/* Elapsed time is the only signal that audio is being captured:
+                the transcript no longer appears until after the student
+                stops, so without it the mic looks inert. */}
+            <span className="font-mono text-[13px] tabular-nums text-ink">
+              {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+            </span>
+          </div>
+          <p className="text-[13px] text-ink-faint">
+            Listening — tap when you are done
+          </p>
+        </div>
+      ) : (
+        <p className="text-[13px] text-ink-faint">Tap to answer</p>
+      )}
 
       <button
         onClick={onSwitchToTyping}

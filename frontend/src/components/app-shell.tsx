@@ -45,9 +45,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, [router]);
 
+  // Fired on mount, not gated on `user` resolving first: /me and /documents
+  // both only need the session cookie, which is already on the request, so
+  // waiting for /me to finish before starting /documents serialized two
+  // round-trips that could run in parallel - the sidebar was visibly slower
+  // to appear than it needed to be. A stale cookie fails both calls the same
+  // way (401), so nothing is lost by not waiting.
   useEffect(() => {
-    if (user) refresh();
-  }, [user, refresh]);
+    refresh();
+  }, [refresh]);
 
   if (authLoading || !user) {
     return (

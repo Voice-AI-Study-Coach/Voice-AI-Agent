@@ -15,6 +15,14 @@ class StartSession(BaseModel):
     # min_length=1 rejects an empty selection here rather than letting it
     # become a session that can never pick a question.
     selected_topics: List[str] = Field(min_length=1, description="The topics selected by the user")
+    # The picker offers to resume an existing active session on this document
+    # rather than silently stacking a second one on top. Set only when the
+    # user explicitly chose "start fresh" over "resume" - it marks that prior
+    # session abandoned before creating the new one.
+    abandon_active: bool = Field(
+        default=False,
+        description="Mark any existing active session on this document as abandoned first",
+    )
 
 
 class QuestionOut(BaseModel):
@@ -66,6 +74,9 @@ class SessionListItem(BaseModel):
     correct_count: int
     started_at: Timestamp = None
     ended_at: Timestamp = None
+    # The topics this session covers, so the sidebar can title it something
+    # meaningful ("Recursive Algorithms") instead of just the date it ran.
+    selected_topics: List[str] = Field(default_factory=list)
 
 
 class SkipRequest(BaseModel):

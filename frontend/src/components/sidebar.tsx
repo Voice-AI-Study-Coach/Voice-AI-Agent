@@ -221,20 +221,34 @@ function DocumentRow({
   onToggle: () => void;
 }) {
   const [sessions, setSessions] = useState<SessionListItem[] | null>(null);
+  // The list is cached once fetched (below), so a session started elsewhere
+  // (the document page's "Start quiz") would never appear here until a full
+  // reload rebuilt this component from scratch. session_count IS refreshed
+  // by the shared documents context though, so a change in it is used as
+  // the signal to drop the cache and refetch, without polling.
+  const [fetchedForCount, setFetchedForCount] = useState<number | null>(null);
 
   // Sessions are not in the sidebar payload, so they are fetched on first
   // expand rather than up front for every document.
   useEffect(() => {
-    if (!expanded || sessions) return;
+    if (!expanded || fetchedForCount === doc.session_count) return;
     let cancelled = false;
     api
       .sessionsFor(doc.document_id)
-      .then((rows) => !cancelled && setSessions(rows))
-      .catch(() => !cancelled && setSessions([]));
+      .then((rows) => {
+        if (cancelled) return;
+        setSessions(rows);
+        setFetchedForCount(doc.session_count);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSessions([]);
+        setFetchedForCount(doc.session_count);
+      });
     return () => {
       cancelled = true;
     };
-  }, [expanded, sessions, doc.document_id]);
+  }, [expanded, fetchedForCount, doc.session_count, doc.document_id]);
 
   if (collapsed) {
     return (
@@ -314,15 +328,9 @@ function DocumentRow({
                 <Link
                   href={`/sessions/${s.session_id}/review`}
                   className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[12px] text-ink-faint transition-colors hover:bg-raised hover:text-ink"
+                  title={sessionTitle(s)}
                 >
-                  <span className="truncate">
-                    {s.started_at
-                      ? new Date(s.started_at).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                        })
-                      : "Session"}
-                  </span>
+                  <span className="truncate">{sessionTitle(s)}</span>
                   <span className="shrink-0 tabular-nums text-ink-ghost">
                     {s.correct_count}/{s.questions_asked}
                   </span>
@@ -334,4 +342,22 @@ function DocumentRow({
       )}
     </li>
   );
+}
+
+/** A student cannot tell "Aug 12" apart from any other session on the same
+ *  document - naming it after the topic(s) actually covered says something
+ *  they can recognize at a glance. Falls back to the date only for the rare
+ *  row with no topics recorded at all. */
+function sessionTitle(s: SessionListItem): string {
+  const topics = s.selected_topics;
+  if (topics.length === 0) {
+    return s.started_at
+      ? new Date(s.started_at).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        })
+      : "Session";
+  }
+  if (topics.length === 1) return topics[0];
+  return `${topics[0]} & ${topics.length - 1} more`;
 }

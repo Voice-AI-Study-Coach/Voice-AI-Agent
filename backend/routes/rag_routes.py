@@ -52,9 +52,9 @@ async def chat(
 
 
 @rag_router.get("/documents", response_model=List[DocumentSummary])
-def get_all_documents(request: Request):
+async def get_all_documents(request: Request):
     try:
-        return handleGetAllDocuments(request=request)
+        return await handleGetAllDocuments(request=request)
     except HTTPException:
         raise
     except Exception as e:

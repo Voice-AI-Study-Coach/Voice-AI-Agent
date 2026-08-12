@@ -10,7 +10,6 @@ from typing import List
 
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.output_parsers import PydanticOutputParser
 
 from llm.schemas import GradeVerdict
 from llm.prompts import grading_system_prompt, grading_human_prompt
@@ -22,21 +21,29 @@ from src.exception import CustomException
 class Grading:
     """Semantic answer grading using LLM evaluation."""
 
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model: str = "openai/gpt-oss-120b"):
         # temperature=0: grading must be deterministic, the same answer has to
         # produce the same verdict every time.
         self.model = model
         self.temperature = 0
-        self.parser = PydanticOutputParser(pydantic_object=GradeVerdict)
 
     def _llm(self):
         """Build a client on a key that isn't currently rate-limited.
 
         The key is fetched per call, not stored on the instance: a key held
         from __init__ can't rotate away when it gets cooled down.
+
+        with_structured_output(GradeVerdict) uses Groq's native tool-calling
+        to guarantee the response matches the schema - unlike
+        PydanticOutputParser, which just asks the model to produce matching
+        JSON in plain text and best-effort parses whatever comes back. Groq,
+        OpenAI and Claude models all support this properly; the manual
+        parser is only needed as a fallback for models without native
+        structured output (e.g. some Ollama models).
         """
         key = groq_pool.get_key()
-        return key, ChatGroq(model=self.model, temperature=self.temperature, api_key=key)
+        llm = ChatGroq(model=self.model, temperature=self.temperature, api_key=key)
+        return key, llm.with_structured_output(GradeVerdict)
 
     async def grade_answer(
         self,
@@ -53,7 +60,7 @@ class Grading:
         for the scoring engine.
         """
         try:
-            system_prompt = grading_system_prompt(self.parser.get_format_instructions())
+            system_prompt = grading_system_prompt()
             human_prompt = grading_human_prompt(
                 question_text=question_text,
                 ideal_answer=ideal_answer,
@@ -70,9 +77,8 @@ class Grading:
             for _ in range(len(groq_pool._keys)):
                 key, llm = self._llm()
                 try:
-                    response = await llm.ainvoke(messages)
+                    verdict = await llm.ainvoke(messages)
                     groq_pool.mark_success(key)
-                    verdict = self.parser.parse(str(response.content))
                     logging.info(
                         f"Graded answer: verdict={verdict.verdict} "
                         f"confidence={verdict.confidence}"

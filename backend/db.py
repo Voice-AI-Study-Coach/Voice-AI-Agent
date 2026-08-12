@@ -40,12 +40,20 @@ def _configure(conn) -> None:
 # min_size=0 lets the pool start even if Neon's endpoint is asleep at boot
 # (Neon suspends idle compute); it wakes on first use instead of failing app
 # startup entirely.
+#
+# check=ConnectionPool.check_connection runs a cheap "select" against a
+# pooled connection before handing it to a caller. Neon can suspend its
+# compute after a period of inactivity, which silently kills connections the
+# pool is still holding - without this check, the next request to reuse one
+# of those dead connections fails with "server closed the connection
+# unexpectedly" instead of transparently getting a fresh one.
 pool = ConnectionPool(
     conninfo=_DATABASE_URL,
     min_size=0,
     max_size=10,
     kwargs={"row_factory": dict_row, "autocommit": True},
     configure=_configure,
+    check=ConnectionPool.check_connection,
     open=False,
 )
 
@@ -56,6 +64,18 @@ def open_pool() -> None:
 
 def close_pool() -> None:
     pool.close()
+
+
+def ping() -> None:
+    """Run a trivial real query against Neon.
+
+    pool.open() establishes the pool object but does not necessarily force
+    Neon's proxy to wake a suspended compute the way an actual query does -
+    a bare TCP-level connect and a query are not the same signal to Neon's
+    autoscaler. Called at startup and on a periodic keep-alive so requests
+    do not pay Neon's cold-start cost (measured ~5s vs ~0.5s warm)."""
+    with cursor() as cur:
+        cur.execute("select 1")
 
 
 @contextmanager

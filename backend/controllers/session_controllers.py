@@ -21,6 +21,7 @@ from backend.utils.rag_utils import (
     getAllTurnsTopics,
 )
 from backend.utils.session_utils import (
+    abandon_active_sessions_for_document,
     delete_turn,
     get_open_turn,
     get_question,
@@ -40,6 +41,7 @@ from backend.utils.session_utils import (
 from llm.grading.coach import Coaching
 from llm.grading.grade import Grading
 from llm.grading.scoring import apply_verdict, new_session_state
+from llm.schemas import GradeVerdict
 from src.exception import CustomException
 
 log = logging.getLogger(__name__)
@@ -105,6 +107,12 @@ def handleSession(request: Request, payload) -> Dict[str, Any]:
         ordered = [t for t in ordered_topics if t in selected]
 
         # 4. create the session
+        # An explicit "start fresh" retires any session the user left active
+        # on this document first - otherwise it would sit around alongside
+        # the new one, invisible, until the idle reaper eventually clears it.
+        if payload.abandon_active:
+            abandon_active_sessions_for_document(user_id=user_id, document_id=document_id)
+
         state = new_session_state(ordered)
         session = insert_session(user_id=user_id, document_id=document_id, state=state)
         session_id = session["session_id"]
@@ -168,16 +176,41 @@ async def handleSubmitAnswer(request: Request, session_id: int, payload) -> Dict
             raise HTTPException(status_code=409, detail="The asked question no longer exists")
 
         # ---- 1. grade (LLM) -------------------------------------------------
+        # An empty/whitespace-only transcript means STT produced nothing to
+        # grade - this is a plain fact, not a judgment call, so it is decided
+        # here rather than handed to the LLM as an edge case it might miss.
         source_material = get_topic_source_material(session["document_id"], question["topic"])
-        t0 = time.perf_counter()
-        verdict = await _grader.grade_answer(
-            question_text=question["question_text"],
-            ideal_answer=question["ideal_answer"],
-            key_points=question["key_points"],
-            source_chunk=source_material,
-            transcript=payload.transcript,
-        )
-        grade_ms = int((time.perf_counter() - t0) * 1000)
+        if not payload.transcript or not payload.transcript.strip():
+            verdict = GradeVerdict(
+                verdict="unclear",
+                matched_points=[],
+                missed_points=[],
+                confidence=1.0,
+                reasoning="No transcript was captured.",
+            )
+            grade_ms = 0
+        else:
+            t0 = time.perf_counter()
+            verdict = await _grader.grade_answer(
+                question_text=question["question_text"],
+                ideal_answer=question["ideal_answer"],
+                key_points=question["key_points"],
+                source_chunk=source_material,
+                transcript=payload.transcript,
+            )
+            grade_ms = int((time.perf_counter() - t0) * 1000)
+
+            # The LLM can occasionally return a verdict that contradicts its
+            # own missed_points list (e.g. "partial" with nothing missed) -
+            # prompting alone cannot guarantee consistency from an LLM, and
+            # per this codebase's rule the verdict is not something a prompt
+            # gets the final say on. missed_points is the ground truth of
+            # what the grader itself found lacking, so reconcile the verdict
+            # to it deterministically rather than trust the label as-is.
+            if verdict.verdict == "partial" and not verdict.missed_points:
+                verdict.verdict = "correct"
+            elif verdict.verdict == "correct" and verdict.missed_points:
+                verdict.verdict = "partial"
 
         # ---- 2. score, level, topic advancement (plain Python) --------------
         # 'unclear' is inert in here: no score change, no consumed question.
@@ -203,7 +236,15 @@ async def handleSubmitAnswer(request: Request, session_id: int, payload) -> Dict
 
         # ---- 5. next question -------------------------------------------------
         next_question = None
-        if not session_complete:
+        if verdict.verdict == "unclear":
+            # STT failed to produce anything usable - re-serve the SAME
+            # question rather than drawing a new one from the pool. Drawing a
+            # new one would silently skip a question the student never
+            # actually got to answer, contradicting the coach's "could not
+            # catch that, please repeat" reply.
+            next_turn = insert_turn_asked(session_id, question, session["level"])
+            next_question = _question_out(question, next_turn["turn_index"])
+        elif not session_complete:
             nq = pick_question(
                 document_id=session["document_id"],
                 session_id=session_id,

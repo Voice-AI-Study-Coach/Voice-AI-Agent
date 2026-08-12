@@ -27,6 +27,16 @@ class TopicInfo(BaseModel):
     )
 
 
+class ActiveSessionInfo(BaseModel):
+    """An unfinished session on this document, so the picker can offer to
+    resume it instead of silently letting the user start a new one on top."""
+    session_id: int
+    current_topic: str
+    questions_asked: int
+    total_questions: int
+    started_at: Timestamp = None
+
+
 class DocumentTopicsResponse(BaseModel):
     document_id: int
     filename: str
@@ -34,6 +44,7 @@ class DocumentTopicsResponse(BaseModel):
     total_topics: int
     covered_topics: int
     topics: List[TopicInfo]
+    active_session: Optional[ActiveSessionInfo] = None
 
 
 class DocumentSummary(BaseModel):

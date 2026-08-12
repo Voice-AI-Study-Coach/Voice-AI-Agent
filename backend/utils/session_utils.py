@@ -126,10 +126,58 @@ def get_sessions_for_document(user_id: int, document_id: int) -> List[Dict[str, 
     try:
         return fetch_all(
             """
-            select session_id, status, questions_asked, correct_count, started_at, ended_at
+            select session_id, status, questions_asked, correct_count, started_at,
+                   ended_at, selected_topics
             from sessions
             where user_id = %s and document_id = %s
             order by started_at desc
+            """,
+            (user_id, document_id),
+        )
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+def abandon_active_sessions_for_document(user_id: int, document_id: int) -> int:
+    """Mark any active session(s) on this document as abandoned.
+
+    Called when the user explicitly chooses "start fresh" on the topic
+    picker instead of resuming - without this a new session would sit
+    alongside the old active one, and the old one would only ever get
+    cleared by the idle reaper.
+    """
+    try:
+        rows = fetch_all(
+            """
+            update sessions set status = 'abandoned', ended_at = %s
+            where user_id = %s and document_id = %s and status = 'active'
+            returning session_id
+            """,
+            (_now(), user_id, document_id),
+        )
+        return len(rows)
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+def get_active_session_for_document(user_id: int, document_id: int) -> Optional[Dict[str, Any]]:
+    """The one in-progress session on this document, if any.
+
+    Used by the topic-selection screen to offer resuming instead of always
+    starting a fresh session on top of one the user never finished. There can
+    only be one active session per (user, document) in practice - starting a
+    new one requires abandoning the old first - but this is not enforced at
+    the DB level, so order by started_at desc and take the newest to be safe.
+    """
+    try:
+        return fetch_one(
+            """
+            select session_id, status, questions_asked, correct_count,
+                   current_topic, selected_topics, started_at, last_activity_at
+            from sessions
+            where user_id = %s and document_id = %s and status = 'active'
+            order by started_at desc
+            limit 1
             """,
             (user_id, document_id),
         )

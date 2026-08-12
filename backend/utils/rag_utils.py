@@ -194,6 +194,53 @@ def count_topics(document_id: int) -> int:
     except Exception as e:
         raise CustomException(e, sys)
 
+def count_distinct_topics_by_document(document_ids: list[int]) -> dict[int, int]:
+    """Distinct topic count per document, batched.
+
+    Used by the sidebar/library listing, which previously called
+    getAllChunksTopics once per document in a loop - each call is its own
+    round-trip to Neon, and those add up badly in serial (N documents meant
+    N+1 network round-trips just for this one number). One query with
+    document_id = ANY(...) does the same job in a single round-trip."""
+    if not document_ids:
+        return {}
+    try:
+        rows = fetch_all(
+            """
+            select document_id, count(distinct topic) as n
+            from chunks
+            where document_id = any(%s)
+            group by document_id
+            """,
+            (document_ids,),
+        )
+        return {row["document_id"]: row["n"] for row in rows}
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
+def count_covered_topics_by_document(user_id: int, document_ids: list[int]) -> dict[int, int]:
+    """Covered-topic count per document, batched - see
+    count_distinct_topics_by_document for why this exists instead of calling
+    get_covered_topics once per document."""
+    if not document_ids:
+        return {}
+    try:
+        rows = fetch_all(
+            """
+            select s.document_id, count(distinct t.topic) as n
+            from turns t
+            join sessions s on s.session_id = t.session_id
+            where s.user_id = %s and s.document_id = any(%s) and t.verdict is not null
+            group by s.document_id
+            """,
+            (user_id, document_ids),
+        )
+        return {row["document_id"]: row["n"] for row in rows}
+    except Exception as e:
+        raise CustomException(e, sys)
+
+
 def get_covered_topics(user_id: int, document_id: int) -> list[str]:
     """Topics with at least one answered turn, across all of this user's
     sessions on the document. Coverage is derived from turns, never stored as

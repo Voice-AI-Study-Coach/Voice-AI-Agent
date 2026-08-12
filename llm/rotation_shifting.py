@@ -132,6 +132,7 @@ class KeyPool:
 groq_pool = KeyPool("GROQ_API_KEY")
 gemini_pool = KeyPool("GEMINI_API_KEY")
 cerebras_pool = KeyPool("CEREBRAS_API_KEY")
+deepgram_pool = KeyPool("DEEPGRAM_API_KEY")
 
 
 def is_rate_limit_error(exc: Exception) -> bool:

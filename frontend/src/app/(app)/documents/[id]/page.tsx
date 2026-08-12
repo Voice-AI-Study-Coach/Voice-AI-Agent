@@ -89,15 +89,28 @@ function DocumentInner() {
     });
   }
 
-  async function start() {
+  async function start(abandonActive = false) {
     setError("");
     setStarting(true);
     try {
-      const res = await api.startSession(documentId, [...selected]);
+      const res = await api.startSession(documentId, [...selected], abandonActive);
+      // Without this the sidebar's session count/list for this document
+      // stayed stale until a manual page reload - the new session's row
+      // (and its title, once given a real one) only showed up after the
+      // student happened to refresh, not the moment the quiz actually
+      // started. Not awaited: the sidebar catching up a beat after
+      // navigation is fine, but blocking the redirect on it is not.
+      refresh();
       router.push(`/sessions/${res.session_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the quiz");
       setStarting(false);
+    }
+  }
+
+  function resumeActiveSession() {
+    if (data?.active_session) {
+      router.push(`/sessions/${data.active_session.session_id}`);
     }
   }
 
@@ -179,6 +192,37 @@ function DocumentInner() {
             Pick what to cover next. Starting will create a new session, so your
             last one keeps its own summary.
           </p>
+        </Card>
+      )}
+
+      {/* Unfinished session on this document */}
+      {data.active_session && (
+        <Card
+          className="mt-6 border-accent/30 bg-accent-soft/50 px-5 py-4 animate-fade-up"
+        >
+          <p className="font-serif text-[17px] text-ink">
+            You have an unfinished quiz - {data.active_session.questions_asked}{" "}
+            of {data.active_session.total_questions} answered.
+          </p>
+          <p className="mt-1 text-[13px] leading-relaxed text-ink-faint">
+            Resume where you left off, on &ldquo;{data.active_session.current_topic}
+            &rdquo;, or start a fresh session with the topics below.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button size="sm" onClick={resumeActiveSession}>
+              Resume quiz
+              <ArrowRightIcon className="size-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={selectedCount === 0}
+              loading={starting}
+              onClick={() => start(true)}
+            >
+              Start fresh instead
+            </Button>
+          </div>
         </Card>
       )}
 
@@ -289,7 +333,11 @@ function DocumentInner() {
                 go
               </p>
             </div>
-            <Button size="lg" loading={starting} onClick={start}>
+            <Button
+              size="lg"
+              loading={starting}
+              onClick={() => start(Boolean(data.active_session))}
+            >
               Start quiz
               <ArrowRightIcon className="size-4" />
             </Button>

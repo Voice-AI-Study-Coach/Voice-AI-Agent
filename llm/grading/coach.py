@@ -8,7 +8,7 @@ grader's confidence was low.
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict
+from typing import Any, AsyncIterator, Dict
 
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -72,3 +72,48 @@ class Coaching:
         except Exception as e:
             logging.error(f"Error phrasing coach reply: {e}")
             raise CustomException(e, sys)
+
+    async def stream_reaction(
+        self, verdict: GradeVerdict, question: Dict[str, Any]
+    ) -> AsyncIterator[str]:
+        """Yield coach text chunks as soon as the LLM produces them.
+
+        Callers can buffer these chunks until sentence boundaries and send
+        each completed sentence to TTS without waiting for the whole reply.
+        The normal phrase_reaction method remains available for the existing
+        JSON endpoint and persistence path.
+        """
+        question_text = (
+            question.get("question_text")
+            or question.get("text")
+            or question.get("prompt")
+            or str(question)
+        )
+        messages = [
+            SystemMessage(content=coaching_system_prompt()),
+            HumanMessage(content=coaching_human_prompt(
+                question_text=question_text,
+                verdict=verdict.verdict,
+                confidence=verdict.confidence,
+                matched_points=verdict.matched_points,
+                missed_points=verdict.missed_points,
+            )),
+        ]
+        last_exc = None
+        for _ in range(len(groq_pool._keys)):
+            key, llm = self._llm()
+            try:
+                async for chunk in llm.astream(messages):
+                    content = getattr(chunk, "content", "")
+                    if content:
+                        yield str(content)
+                groq_pool.mark_success(key)
+                return
+            except Exception as e:
+                if is_rate_limit_error(e):
+                    groq_pool.mark_rate_limited(key)
+                    last_exc = e
+                    continue
+                logging.error(f"Error streaming coach reply: {e}")
+                raise CustomException(e, sys)
+        raise CustomException(last_exc or "All Groq keys are rate-limited", sys)

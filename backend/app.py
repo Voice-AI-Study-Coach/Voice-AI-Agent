@@ -68,7 +68,10 @@ app = FastAPI(title="Voice AI Study Coach", lifespan=lifespan)
 # permitted alongside allow_credentials.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://voice-ai-agent-cyan-nine.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

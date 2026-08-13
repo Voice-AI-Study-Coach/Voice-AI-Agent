@@ -13,7 +13,6 @@ pymupdf
 pydantic
 dotenv
 openai
-langchain-cerebras
 deepgram-sdk
 psycopg[binary,pool]
 pgvector

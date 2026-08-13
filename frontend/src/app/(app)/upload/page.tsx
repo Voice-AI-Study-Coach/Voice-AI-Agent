@@ -119,7 +119,7 @@ function UploadInner() {
   const processing = documentId !== null;
 
   return (
-    <div className="mx-auto max-w-2xl px-8 py-16">
+    <div className="mx-auto max-w-2xl px-4 py-10 sm:px-8 sm:py-16">
       <header className="animate-fade-up">
         <h1 className="font-serif text-[30px] tracking-[-0.02em] text-ink">
           {processing ? "Preparing your document" : "Add a document"}

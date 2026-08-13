@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { MarketingNav } from "@/components/marketing-nav";
 import { Button, Card, cx } from "@/components/ui";
@@ -77,7 +78,10 @@ const BENEFITS = [
 ];
 
 export default function HomePage() {
-  const [loggedIn, setLoggedIn] = useState(false);
+  const router = useRouter();
+  // null = still checking; skip rendering the marketing page until we know,
+  // so a logged-in user never sees a flash of it before being sent onward.
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
 
   useEffect(() => {
     api
@@ -86,7 +90,17 @@ export default function HomePage() {
       .catch(() => setLoggedIn(false));
   }, []);
 
-  const ctaHref = loggedIn ? "/library" : "/signup";
+  useEffect(() => {
+    if (loggedIn) {
+      router.replace("/library");
+    }
+  }, [loggedIn, router]);
+
+  if (loggedIn === null || loggedIn) {
+    return null;
+  }
+
+  const ctaHref = "/signup";
 
   return (
     <div className="min-h-screen bg-paper">

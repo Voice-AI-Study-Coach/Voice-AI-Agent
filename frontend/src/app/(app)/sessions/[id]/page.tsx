@@ -290,7 +290,7 @@ export default function QuizPage() {
   return (
     <div className="flex h-full flex-col">
       {/* Progress header */}
-      <header className="shrink-0 border-b border-line bg-paper/80 px-8 py-4 backdrop-blur-sm">
+      <header className="shrink-0 border-b border-line bg-paper/80 px-4 py-4 backdrop-blur-sm sm:px-8">
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="truncate text-[13px] font-medium text-ink">{topic}</p>
@@ -311,7 +311,7 @@ export default function QuizPage() {
       </header>
 
       {/* Body */}
-      <div className="flex flex-1 items-center justify-center overflow-y-auto px-8 py-10">
+      <div className="flex flex-1 items-center justify-center overflow-y-auto px-4 py-10 sm:px-8">
         <div className="w-full max-w-2xl">
           {phase === "feedback" && feedback ? (
             <Feedback data={feedback} onNext={next} />

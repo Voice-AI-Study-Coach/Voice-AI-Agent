@@ -1,12 +1,13 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import type { DocumentSummary } from "@/lib/types";
 import { useAuth } from "./auth-provider";
 import { Sidebar } from "./sidebar";
-import { Spinner } from "./ui";
+import { cx, Spinner } from "./ui";
+import { PanelIcon } from "./icons";
 
 interface DocumentsValue {
   documents: DocumentSummary[];
@@ -27,9 +28,21 @@ export function useDocuments() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [docsLoading, setDocsLoading] = useState(true);
+  // The sidebar is an always-visible column on desktop but a slide-over
+  // drawer on mobile (there is no room for both it and page content at once
+  // below the md breakpoint) - closed by default so it never covers the
+  // page on first load.
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close the drawer on navigation - otherwise picking a document/session
+  // leaves it open over the new page.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (!authLoading && !user) router.replace("/login");
@@ -66,8 +79,46 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <DocumentsContext.Provider value={{ documents, refresh }}>
       <div className="flex h-screen overflow-hidden">
-        <Sidebar documents={documents} loading={docsLoading} />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        {/* Desktop: a normal column. Mobile: an overlay drawer, positioned
+            off-canvas until opened - see the translate classes below. */}
+        <div
+          className={cx(
+            "fixed inset-y-0 left-0 z-40 md:static md:z-auto",
+            "transition-transform duration-200 ease-out md:transition-none",
+            mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+          )}
+        >
+          <Sidebar
+            documents={documents}
+            loading={docsLoading}
+            onNavigate={() => setMobileOpen(false)}
+          />
+        </div>
+
+        {mobileOpen && (
+          <div
+            aria-hidden
+            onClick={() => setMobileOpen(false)}
+            className="fixed inset-0 z-30 bg-ink/40 md:hidden"
+          />
+        )}
+
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {/* Mobile-only top bar: the sidebar's own toggle button is
+              off-canvas when collapsed, so opening it needs a control that is
+              always on screen. */}
+          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 md:hidden">
+            <button
+              onClick={() => setMobileOpen(true)}
+              aria-label="Open menu"
+              className="flex size-9 items-center justify-center rounded-lg text-ink-faint transition-colors hover:bg-raised hover:text-ink"
+            >
+              <PanelIcon />
+            </button>
+            <span className="font-serif text-[15px] text-ink">Study Coach</span>
+          </div>
+          <main className="flex-1 overflow-y-auto">{children}</main>
+        </div>
       </div>
     </DocumentsContext.Provider>
   );

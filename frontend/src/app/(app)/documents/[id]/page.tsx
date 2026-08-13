@@ -135,7 +135,7 @@ function DocumentInner() {
 
   if (!data) {
     return (
-      <div className="mx-auto max-w-3xl px-8 py-16">
+      <div className="mx-auto max-w-3xl px-4 py-16 sm:px-8">
         <ErrorNote>{error || "Document not found"}</ErrorNote>
       </div>
     );
@@ -147,7 +147,7 @@ function DocumentInner() {
     visible.length > 0 && visible.every((t) => selected.has(t.topic));
 
   return (
-    <div className="mx-auto max-w-3xl px-8 py-14 pb-32">
+    <div className="mx-auto max-w-3xl px-4 py-14 pb-32 sm:px-8">
       {/* Header */}
       <header className="animate-fade-up">
         <div className="flex items-start justify-between gap-4">
@@ -322,7 +322,7 @@ function DocumentInner() {
       {/* Start bar */}
       {selectedCount > 0 && (
         <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-paper/85 backdrop-blur-md">
-          <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-8 py-4">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-4 py-4 sm:px-8">
             <div>
               <p className="text-sm font-medium text-ink">
                 {selectedCount} {selectedCount === 1 ? "topic" : "topics"}{" "}

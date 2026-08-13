@@ -1,4 +1,9 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { api } from "@/lib/api";
 import { BookIcon, MicIcon, SparkIcon } from "@/components/icons";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -25,6 +30,22 @@ export default function AuthLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+  // A logged-in user landing on /login or /signup (stale tab, back button,
+  // typed URL) should go straight to the app, not fill out a form again.
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    api
+      .me()
+      .then(() => router.replace("/library"))
+      .catch(() => setChecked(true));
+  }, [router]);
+
+  if (!checked) {
+    return null;
+  }
+
   return (
     <div className="flex min-h-screen">
       {/* Form side */}

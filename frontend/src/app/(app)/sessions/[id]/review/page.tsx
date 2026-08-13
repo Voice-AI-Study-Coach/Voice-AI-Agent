@@ -34,7 +34,7 @@ export default function ReviewPage() {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-2xl px-8 py-16">
+      <div className="mx-auto max-w-2xl px-4 py-16 sm:px-8">
         <ErrorNote>{error}</ErrorNote>
       </div>
     );
@@ -53,7 +53,7 @@ export default function ReviewPage() {
   const answered = data.turns.filter((t) => t.verdict !== null);
 
   return (
-    <div className="mx-auto max-w-2xl px-8 py-14">
+    <div className="mx-auto max-w-2xl px-4 py-14 sm:px-8">
       <Link
         href={`/documents/${data.document_id}`}
         className="inline-flex items-center gap-1.5 text-[13px] text-ink-faint transition-colors hover:text-ink"

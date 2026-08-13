@@ -16,7 +16,7 @@ export default function LibraryPage() {
     hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
   return (
-    <div className="mx-auto max-w-4xl px-8 py-14">
+    <div className="mx-auto max-w-4xl px-4 py-10 sm:px-8 sm:py-14">
       <header className="animate-fade-up">
         <h1 className="font-serif text-[32px] tracking-[-0.02em] text-ink">
           {greeting}, {user?.name?.split(" ")[0]}

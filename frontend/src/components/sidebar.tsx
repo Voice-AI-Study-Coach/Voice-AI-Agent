@@ -22,9 +22,12 @@ const COLLAPSE_KEY = "sc:sidebar-collapsed";
 export function Sidebar({
   documents,
   loading,
+  onNavigate,
 }: {
   documents: DocumentSummary[];
   loading: boolean;
+  /** Called when a nav link is clicked - lets the mobile drawer close itself. */
+  onNavigate?: () => void;
 }) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
@@ -61,7 +64,12 @@ export function Sidebar({
         // the viewport and pushing the profile row off the bottom.
         "relative flex h-full min-h-0 shrink-0 flex-col border-r border-line bg-sunken",
         "transition-[width] duration-200 ease-out",
-        collapsed ? "w-[60px]" : "w-[264px]",
+        // As a mobile drawer the collapsed (icon-only) state is not useful -
+        // there is no adjacent content it needs to make room for - so it
+        // always opens at full width there, regardless of the desktop
+        // collapse preference.
+        "w-[264px]",
+        collapsed ? "md:w-[60px]" : "md:w-[264px]",
       )}
     >
       {/* Header */}
@@ -87,7 +95,7 @@ export function Sidebar({
 
       {/* New document */}
       <div className={cx("px-3 pb-2", collapsed && "px-2")}>
-        <Link href="/upload">
+        <Link href="/upload" onClick={onNavigate}>
           <button
             title="New document"
             className={cx(
@@ -135,6 +143,7 @@ export function Sidebar({
                 active={pathname.includes(`/documents/${doc.document_id}`)}
                 expanded={expanded.has(doc.document_id)}
                 onToggle={() => toggleDoc(doc.document_id)}
+                onNavigate={onNavigate}
               />
             ))}
           </ul>
@@ -213,12 +222,14 @@ function DocumentRow({
   active,
   expanded,
   onToggle,
+  onNavigate,
 }: {
   doc: DocumentSummary;
   collapsed: boolean;
   active: boolean;
   expanded: boolean;
   onToggle: () => void;
+  onNavigate?: () => void;
 }) {
   const [sessions, setSessions] = useState<SessionListItem[] | null>(null);
   // The list is cached once fetched (below), so a session started elsewhere
@@ -256,6 +267,7 @@ function DocumentRow({
         <Link
           href={`/documents/${doc.document_id}`}
           title={doc.filename}
+          onClick={onNavigate}
           className={cx(
             "flex size-9 items-center justify-center rounded-lg transition-colors",
             active
@@ -296,6 +308,7 @@ function DocumentRow({
 
         <Link
           href={`/documents/${doc.document_id}`}
+          onClick={onNavigate}
           className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2"
         >
           <span
@@ -327,6 +340,7 @@ function DocumentRow({
               <li key={s.session_id}>
                 <Link
                   href={`/sessions/${s.session_id}/review`}
+                  onClick={onNavigate}
                   className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[12px] text-ink-faint transition-colors hover:bg-raised hover:text-ink"
                   title={sessionTitle(s)}
                 >

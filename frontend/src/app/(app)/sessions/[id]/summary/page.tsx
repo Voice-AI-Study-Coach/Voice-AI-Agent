@@ -44,7 +44,7 @@ export default function SummaryPage() {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-2xl px-8 py-16">
+      <div className="mx-auto max-w-2xl px-4 py-16 sm:px-8">
         <ErrorNote>{error}</ErrorNote>
       </div>
     );
@@ -61,7 +61,7 @@ export default function SummaryPage() {
   const pct = Math.round(data.overall_accuracy * 100);
 
   return (
-    <div className="mx-auto max-w-2xl px-8 py-14">
+    <div className="mx-auto max-w-2xl px-4 py-14 sm:px-8">
       <header className="animate-fade-up">
         <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-ghost">
           Session complete

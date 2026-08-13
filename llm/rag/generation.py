@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_cerebras import ChatCerebras
 from langchain_classic.output_parsers import PydanticOutputParser
 
 from src.exception import CustomException

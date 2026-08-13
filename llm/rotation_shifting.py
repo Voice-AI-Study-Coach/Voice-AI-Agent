@@ -131,7 +131,6 @@ class KeyPool:
 # Shared pools for the providers this project uses.
 groq_pool = KeyPool("GROQ_API_KEY")
 gemini_pool = KeyPool("GEMINI_API_KEY")
-cerebras_pool = KeyPool("CEREBRAS_API_KEY")
 deepgram_pool = KeyPool("DEEPGRAM_API_KEY")
 
 

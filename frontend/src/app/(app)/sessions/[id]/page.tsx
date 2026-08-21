@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { MIN_ANSWER_MS, QUESTIONS_PER_TOPIC } from "@/lib/config";
 import { STT_AVAILABLE, createStt } from "@/lib/speech/stt";
 import { TTS_AVAILABLE, speak, stopSpeaking } from "@/lib/speech/tts";
+import { AnswerStream } from "@/lib/speech/answer-stream";
 import { SttUnavailableError } from "@/lib/speech/types";
 import type { SttHandle } from "@/lib/speech/types";
 import type { AnswerResponse, QuestionOut, Verdict } from "@/lib/types";
@@ -33,6 +34,9 @@ export default function QuizPage() {
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [feedback, setFeedback] = useState<AnswerResponse | null>(null);
+  // The coach reply as it is spoken, one phrase at a time. Once the full
+  // result lands, feedback.coach_reply takes over with the same words.
+  const [streamingReply, setStreamingReply] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -111,6 +115,26 @@ export default function QuizPage() {
     return () => handle.cancel();
   }, [questionText]);
 
+  /* ---- streaming answer socket ------------------------------------------- */
+  // One socket for the whole quiz. Opening it per answer would put a
+  // handshake plus the backend's Deepgram connect back on the critical path,
+  // which is most of what streaming was meant to remove.
+  const streamRef = useRef<AnswerStream | null>(null);
+  useEffect(() => {
+    if (!Number.isFinite(sessionId)) return;
+    const stream = new AnswerStream(sessionId, {
+      // Appended per phrase, as each is spoken - so the words appear in time
+      // with the voice rather than all at once ahead of it.
+      onPhrase: (phrase) =>
+        setStreamingReply((prev) => (prev ? `${prev} ${phrase}` : phrase)),
+    });
+    streamRef.current = stream;
+    return () => {
+      streamRef.current = null;
+      stream.close();
+    };
+  }, [sessionId]);
+
   /* ---- recording timer --------------------------------------------------- */
   useEffect(() => {
     if (phase !== "recording") {
@@ -129,8 +153,29 @@ export default function QuizPage() {
       setSilencePrompt(false);
       setPhase("grading");
       setError("");
+      setStreamingReply("");
       try {
-        const res = await api.answer(sessionId, transcript, sttMs);
+        // Stream when the socket is up: the coach's text renders token by
+        // token and its voice starts on the first finished phrase, instead
+        // of both waiting for the whole reply. Falls back to the plain POST
+        // if the socket could not be opened, so a blocked WebSocket degrades
+        // to the old behaviour rather than breaking the quiz.
+        const stream = streamRef.current;
+        let res: AnswerResponse;
+        // The streaming path speaks as it generates; the fallback still needs
+        // the old fire-and-forget speak() once the reply is whole.
+        let spoken = false;
+        if (stream) {
+          try {
+            res = await stream.submit(transcript, sttMs);
+            spoken = true;
+          } catch {
+            setStreamingReply("");
+            res = await api.answer(sessionId, transcript, sttMs);
+          }
+        } else {
+          res = await api.answer(sessionId, transcript, sttMs);
+        }
         setAsked(res.questions_asked);
         setCorrect(res.correct_count);
         setLevel(res.level);
@@ -146,6 +191,10 @@ export default function QuizPage() {
           setQuestion(res.next_question);
           setFeedback(null);
           setPhase("idle");
+          // This path bypasses next(), so it has to clear the streamed reply
+          // itself or the "I could not make that out" line stays on screen
+          // over the re-served question.
+          setStreamingReply("");
 
           if (unclearStreak.current >= 2) {
             // Speech capture is not working. Re-asking a third time would
@@ -159,12 +208,12 @@ export default function QuizPage() {
             return;
           }
 
-          if (TTS_AVAILABLE) speak(res.coach_reply);
+          if (TTS_AVAILABLE && !spoken) speak(res.coach_reply);
           return;
         }
 
         unclearStreak.current = 0;
-        if (TTS_AVAILABLE) speak(res.coach_reply);
+        if (TTS_AVAILABLE && !spoken) speak(res.coach_reply);
         setFeedback(res);
         setPhase("feedback");
       } catch (err) {
@@ -184,6 +233,11 @@ export default function QuizPage() {
     }
     setQuestion(feedback.next_question);
     setFeedback(null);
+    // Cleared here, with the turn it belongs to. Leaving it set meant the
+    // previous answer's reply was still in state when the next question was
+    // submitted, and it rendered instantly under the new question before any
+    // fresh token had arrived.
+    setStreamingReply("");
     setPhase("idle");
   }
 
@@ -191,8 +245,14 @@ export default function QuizPage() {
   async function startRecording() {
     setError("");
     // Stop the coach mid-sentence so the recording does not capture the
-    // question being read aloud back into the student's own answer.
+    // question being read aloud back into the student's own answer. Both
+    // paths have to be silenced: the question is spoken through the <audio>
+    // element, the coach's reply through the streamed PCM player.
     stopSpeaking();
+    streamRef.current?.stopSpeaking();
+    // Opening the socket now, from the same gesture, overlaps the handshake
+    // with the student speaking instead of paying for it after they finish.
+    void streamRef.current?.connect().catch(() => {});
     try {
       const stt = createStt({
         onLevel: setLevel01,
@@ -313,8 +373,16 @@ export default function QuizPage() {
       {/* Body */}
       <div className="flex flex-1 items-center justify-center overflow-y-auto px-4 py-10 sm:px-8">
         <div className="w-full max-w-2xl">
-          {phase === "feedback" && feedback ? (
-            <Feedback data={feedback} onNext={next} />
+          {/* Shown as soon as the coach starts talking, not only once the
+              whole result has landed: during grading `feedback` is still null
+              and only the streamed text exists, so the same panel fills in
+              live and then settles when the verdict arrives. */}
+          {(phase === "feedback" && feedback) || streamingReply ? (
+            <Feedback
+              data={feedback}
+              streamingReply={streamingReply}
+              onNext={next}
+            />
           ) : (
             <>
               {question && (
@@ -352,6 +420,12 @@ export default function QuizPage() {
               {/* Answer control */}
               <div className="mt-12">
                 {phase === "grading" ? (
+                  // The streamed reply is NOT rendered here. It appears in
+                  // <Feedback> instead, which owns the coach's text for the
+                  // whole turn - rendering it here too meant the same
+                  // sentence was drawn by two different components in two
+                  // different places, so it visibly jumped when the final
+                  // result arrived and the phase flipped.
                   <div className="flex flex-col items-center gap-3 animate-fade-in">
                     <Spinner className="size-5 text-ink-faint" />
                     <p className="text-[13px] text-ink-faint">
@@ -545,50 +619,67 @@ const VERDICT_COPY: Record<Verdict, { label: string; tone: string; bg: string }>
 
 function Feedback({
   data,
+  streamingReply,
   onNext,
 }: {
-  data: AnswerResponse;
+  /** Null while the coach is still talking - the verdict, the points and the
+   *  next-question button only exist once the whole turn has been graded. */
+  data: AnswerResponse | null;
+  streamingReply: string;
   onNext: () => void;
 }) {
-  const copy = VERDICT_COPY[data.verdict];
+  const copy = data ? VERDICT_COPY[data.verdict] : null;
+  // The streamed text IS the coach reply; data.coach_reply is the same words
+  // once the turn completes. Preferring the stream while it is running keeps
+  // one element rendering one string, so nothing re-flows at the handoff.
+  const reply = streamingReply || data?.coach_reply || "";
 
   return (
     <div className="animate-fade-up">
-      <div className="flex items-center gap-2.5">
-        <span
-          className={cx(
-            "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium",
-            copy.bg,
-            copy.tone,
-          )}
-        >
-          {data.verdict === "correct" && <CheckIcon className="size-3" />}
-          {copy.label}
-        </span>
-        {data.topic_changed && <Pill tone="accent">New topic</Pill>}
-      </div>
+      {data && copy && (
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cx(
+              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium",
+              copy.bg,
+              copy.tone,
+            )}
+          >
+            {data.verdict === "correct" && <CheckIcon className="size-3" />}
+            {copy.label}
+          </span>
+          {data.topic_changed && <Pill tone="accent">New topic</Pill>}
+        </div>
+      )}
 
-      <p className="mt-5 font-serif text-[22px] leading-[1.45] text-ink">
-        {data.coach_reply}
+      <p
+        className={cx(
+          "font-serif text-[22px] leading-[1.45] text-ink",
+          data ? "mt-5" : "",
+        )}
+      >
+        {reply}
       </p>
 
-      {data.matched_points.length > 0 && (
+      {data && data.matched_points.length > 0 && (
         <PointList
           title="You covered"
           points={data.matched_points}
           tone="mastered"
         />
       )}
-      {data.missed_points.length > 0 && (
+      {data && data.missed_points.length > 0 && (
         <PointList title="Worth remembering" points={data.missed_points} tone="weak" />
       )}
 
-      <div className="mt-10">
-        <Button size="lg" onClick={onNext}>
-          {data.session_complete ? "See your summary" : "Next question"}
-          <ArrowRightIcon className="size-4" />
-        </Button>
-      </div>
+      {data && (
+        <div className="mt-10">
+          <Button size="lg" onClick={onNext}>
+            {data.session_complete ? "See your summary" : "Next question"}
+            <ArrowRightIcon className="size-4" />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

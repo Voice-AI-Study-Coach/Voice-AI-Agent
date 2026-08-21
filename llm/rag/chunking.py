@@ -3,13 +3,14 @@ import sys
 import re
 
 from langchain_ollama import ChatOllama
+from langchain_mistralai import ChatMistralAI
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
 from src.exception import CustomException
 from src.logger import logging
 from llm.schemas import Sections
 from llm.prompts import chunking_prompt
-from llm.rotation_shifting import groq_pool, is_rate_limit_error
+from llm.rotation_shifting import mistral_pool, is_rate_limit_error
 from dotenv import load_dotenv
 from langchain_classic.output_parsers import PydanticOutputParser
 
@@ -20,28 +21,28 @@ class Chunking:
         self.doc = doc
         self.toc = toc
 
-    def _structured_groq(self):
-        """Build a ChatGroq structured-output client using a key that isn't rate-limited."""
-        key = groq_pool.get_key()
-        llm = ChatGroq(model='llama-3.3-70b-versatile', temperature=0, api_key=key)
+    def _structured_mistral(self):
+        """Build a ChatMistralAI structured-output client using a key that isn't rate-limited."""
+        key = mistral_pool.get_key()
+        llm = ChatMistralAI(model="mistral-medium-3-5", temperature=0, api_key=key)
         return key, llm.with_structured_output(schema=Sections)
 
     def _invoke_with_rotation(self, prompt):
-        """Invoke Groq, rotating to the next available key on rate-limit errors."""
+        """Invoke Mistral, rotating to the next available key on rate-limit errors."""
         last_exc = None
-        for _ in range(len(groq_pool._keys)):
-            key, structured = self._structured_groq()
+        for _ in range(len(mistral_pool._keys)):
+            key, structured = self._structured_mistral()
             try:
                 result = structured.invoke(prompt)
-                groq_pool.mark_success(key)
+                mistral_pool.mark_success(key)
                 return result
             except Exception as e:
                 if is_rate_limit_error(e):
-                    groq_pool.mark_rate_limited(key)
+                    mistral_pool.mark_rate_limited(key)
                     last_exc = e
                     continue
                 raise
-        raise CustomException(last_exc or "All Groq keys are rate-limited", sys)
+        raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)
 
     def documentChunking(self):
         try:

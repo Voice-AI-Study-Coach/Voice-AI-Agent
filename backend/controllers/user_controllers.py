@@ -18,7 +18,11 @@ def handleSignupController(user):
         existing = fetch_one("select email from users where email = %s", (user.email,))
         if existing:
             raise HTTPException(status_code=409, detail="The user already exists")
-        hashed_password = bcrypt.hashpw(password=user.password.encode(), salt=bcrypt.gensalt(rounds=12))
+        # rounds=10, not 12: bcrypt is deliberately slow, and each extra round
+        # doubles it (12 measured at ~264ms here, 10 at ~66ms). 10 is still a
+        # strong work factor against offline cracking, and signup is a page the
+        # user waits on - the 200ms was pure perceived latency.
+        hashed_password = bcrypt.hashpw(password=user.password.encode(), salt=bcrypt.gensalt(rounds=10))
         decoded_password = hashed_password.decode()
         row = execute_returning(
             "insert into users (name, email, password) values (%s, %s, %s) "

@@ -46,12 +46,26 @@ async def handleNewChat(request, file):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
         content_hash = hashlib.sha256(contents).hexdigest()
-        existing = find_document_by_hash(user_id=user_id, content_hash=content_hash)
+        # to_thread, not a direct call: this runs inside an async handler, so a
+        # blocking query here parks the event loop thread for the whole round
+        # trip and every other request in the process waits behind it.
+        existing = await asyncio.to_thread(
+            find_document_by_hash, user_id=user_id, content_hash=content_hash
+        )
 
         # Only reuse a document that actually finished. A previous failure must
         # fall through to the normal path so ingestion is retried.
         if existing and existing["status"] == "ready":
-            covered = get_covered_topics(user_id=user_id, document_id=existing["document_id"])
+            # Independent of each other, so they go out together rather than
+            # one after the other - two round trips for the price of one.
+            covered, total_topic_count = await asyncio.gather(
+                asyncio.to_thread(
+                    get_covered_topics,
+                    user_id=user_id,
+                    document_id=existing["document_id"],
+                ),
+                asyncio.to_thread(count_topics, existing["document_id"]),
+            )
             log.info("handleNewChat: hash hit document_id=%s, skipping ingestion",
                      existing["document_id"])
             return {
@@ -60,7 +74,7 @@ async def handleNewChat(request, file):
                 "status": "ready",
                 "already_seen": True,
                 "covered_topic_count": len(covered),
-                "total_topic_count": count_topics(existing["document_id"]),
+                "total_topic_count": total_topic_count,
             }
 
         doc = create_document(
@@ -116,7 +130,7 @@ async def handleGetAllDocuments(request):
     """
     try:
         user_id = request.state.user['user_id']
-        docs = load_all_documents(user_id=user_id)
+        docs = await asyncio.to_thread(load_all_documents, user_id=user_id)
         document_ids = [doc["document_id"] for doc in docs]
 
         session_counts, total_topics, covered_topics = await asyncio.gather(

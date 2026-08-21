@@ -5,6 +5,7 @@ and phrases a reply; score, level, topic advancement and question selection
 are plain Python and SQL - deterministic, testable and explainable.
 """
 
+import asyncio
 import logging
 import sys
 import time
@@ -41,6 +42,7 @@ from backend.utils.session_utils import (
 from llm.grading.coach import Coaching
 from llm.grading.grade import Grading
 from llm.grading.scoring import apply_verdict, new_session_state
+from llm.grading.speech_chunking import achunk_tokens
 from llm.schemas import GradeVerdict
 from src.exception import CustomException
 
@@ -154,132 +156,232 @@ def handleSession(request: Request, payload) -> Dict[str, Any]:
         raise CustomException(e, sys)
 
 
+async def _grade_and_score(user_id: int, session_id: int, payload) -> Dict[str, Any]:
+    """Everything up to (but not including) the coach reply.
+
+    Split out of handleSubmitAnswer so the streaming path can run the same
+    grading and scoring without duplicating it: the coach is the only stage
+    that differs between the two, and every adaptive decision here must stay
+    identical whichever transport asked for it.
+
+    Returns the pieces the caller needs to finish the turn.
+    """
+    # Both lookups key off session_id alone, so they go out together rather
+    # than one after the other. The ownership check still gates everything
+    # below - fetching the turn concurrently discloses nothing, because
+    # nothing is returned until the session is confirmed to be this user's.
+    session, turn = await asyncio.gather(
+        asyncio.to_thread(
+            get_session_for_user, session_id=session_id, user_id=user_id
+        ),
+        asyncio.to_thread(get_open_turn, session_id),
+    )
+
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session["status"] != "active":
+        raise HTTPException(status_code=409, detail="Session is not active")
+
+    if turn is None:
+        raise HTTPException(
+            status_code=409, detail="No question is currently awaiting an answer"
+        )
+
+    question = await asyncio.to_thread(get_question, turn["question_id"])
+    if question is None:
+        raise HTTPException(status_code=409, detail="The asked question no longer exists")
+
+    # ---- 1. grade (LLM) -------------------------------------------------
+    # The source material is only ever used to ground the grader, so it is not
+    # needed at all when there is no transcript to grade. Fetching it
+    # unconditionally spent a Neon round trip on every 'unclear' turn - the
+    # exact case where the student is already being asked to repeat themselves
+    # and latency is most visible.
+    if not payload.transcript or not payload.transcript.strip():
+        verdict = GradeVerdict(
+            verdict="unclear",
+            matched_points=[],
+            missed_points=[],
+            confidence=1.0,
+            reasoning="No transcript was captured.",
+        )
+        grade_ms = 0
+    else:
+        t0 = time.perf_counter()
+        source_material = await asyncio.to_thread(
+            get_topic_source_material, session["document_id"], question["topic"]
+        )
+        verdict = await _grader.grade_answer(
+            question_text=question["question_text"],
+            ideal_answer=question["ideal_answer"],
+            key_points=question["key_points"],
+            source_chunk=source_material,
+            transcript=payload.transcript,
+        )
+        grade_ms = int((time.perf_counter() - t0) * 1000)
+
+        if verdict.verdict == "partial" and not verdict.missed_points:
+            verdict.verdict = "correct"
+        elif verdict.verdict == "correct" and verdict.missed_points:
+            verdict.verdict = "partial"
+
+    # ---- 2. score, level, topic advancement (plain Python) --------------
+    flags = apply_verdict(session, verdict.verdict)
+
+    return {
+        "session": session,
+        "turn": turn,
+        "question": question,
+        "verdict": verdict,
+        "grade_ms": grade_ms,
+        "topic_changed": flags["topic_changed"],
+        "session_complete": flags["session_complete"],
+    }
+
+
+def _finish_turn(
+    session_id: int,
+    graded: Dict[str, Any],
+    coach_reply: str,
+    payload,
+) -> Dict[str, Any]:
+    """Persist the answered turn and pick what to ask next.
+
+    The mirror of _grade_and_score: everything AFTER the coach reply, shared
+    by both transports for the same reason.
+    """
+    session = graded["session"]
+    turn = graded["turn"]
+    question = graded["question"]
+    verdict = graded["verdict"]
+    session_complete = graded["session_complete"]
+
+    # ---- 4. persist ------------------------------------------------------
+    update_turn_answered(
+        turn_id=turn["turn_id"],
+        transcript=payload.transcript,
+        verdict=verdict,
+        coach_reply=coach_reply,
+        grade_ms=graded["grade_ms"],
+        stt_ms=payload.stt_ms,
+    )
+    update_session(session)
+
+    # ---- 5. next question -------------------------------------------------
+    next_question = None
+    if verdict.verdict == "unclear":
+        next_turn = insert_turn_asked(session_id, question, session["level"])
+        next_question = _question_out(question, next_turn["turn_index"])
+    elif not session_complete:
+        nq = pick_question(
+            document_id=session["document_id"],
+            session_id=session_id,
+            topic=session["current_topic"],
+            level=session["level"],
+        )
+        if nq is None:
+            session["status"] = "completed"
+            update_session(session)
+            session_complete = True
+        else:
+            next_turn = insert_turn_asked(session_id, nq, session["level"])
+            next_question = _question_out(nq, next_turn["turn_index"])
+
+    return {
+        "verdict": verdict.verdict,
+        "matched_points": verdict.matched_points,
+        "missed_points": verdict.missed_points,
+        "confidence": verdict.confidence,
+        "coach_reply": coach_reply,
+        "score": session["score"],
+        "level": session["level"],
+        "current_topic": session["current_topic"],
+        "questions_asked": session["questions_asked"],
+        "correct_count": session["correct_count"],
+        "topic_changed": graded["topic_changed"],
+        "session_complete": session_complete,
+        "next_question": next_question,
+    }
+
+
 async def handleSubmitAnswer(request: Request, session_id: int, payload) -> Dict[str, Any]:
-    """POST /sessions/{id}/answer - the engine. Every adaptive behaviour is here."""
+    """POST /sessions/{id}/answer - the engine. Every adaptive behaviour is here.
+
+    Grades, scores, phrases the coach reply, persists, and picks the next
+    question. The coach is awaited in full before this returns, so the caller
+    receives one complete JSON payload; the WebSocket path in
+    handleSubmitAnswerStreaming streams the same reply instead, for callers
+    that want audio starting before the sentence is finished.
+    """
     try:
         user_id = request.state.user["user_id"]
-
-        session = get_session_for_user(session_id=session_id, user_id=user_id)
-        if session is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        if session["status"] != "active":
-            raise HTTPException(status_code=409, detail="Session is not active")
-
-        turn = get_open_turn(session_id)
-        if turn is None:
-            raise HTTPException(
-                status_code=409, detail="No question is currently awaiting an answer"
-            )
-
-        question = get_question(turn["question_id"])
-        if question is None:
-            raise HTTPException(status_code=409, detail="The asked question no longer exists")
-
-        # ---- 1. grade (LLM) -------------------------------------------------
-        # An empty/whitespace-only transcript means STT produced nothing to
-        # grade - this is a plain fact, not a judgment call, so it is decided
-        # here rather than handed to the LLM as an edge case it might miss.
-        source_material = get_topic_source_material(session["document_id"], question["topic"])
-        if not payload.transcript or not payload.transcript.strip():
-            verdict = GradeVerdict(
-                verdict="unclear",
-                matched_points=[],
-                missed_points=[],
-                confidence=1.0,
-                reasoning="No transcript was captured.",
-            )
-            grade_ms = 0
-        else:
-            t0 = time.perf_counter()
-            verdict = await _grader.grade_answer(
-                question_text=question["question_text"],
-                ideal_answer=question["ideal_answer"],
-                key_points=question["key_points"],
-                source_chunk=source_material,
-                transcript=payload.transcript,
-            )
-            grade_ms = int((time.perf_counter() - t0) * 1000)
-
-            # The LLM can occasionally return a verdict that contradicts its
-            # own missed_points list (e.g. "partial" with nothing missed) -
-            # prompting alone cannot guarantee consistency from an LLM, and
-            # per this codebase's rule the verdict is not something a prompt
-            # gets the final say on. missed_points is the ground truth of
-            # what the grader itself found lacking, so reconcile the verdict
-            # to it deterministically rather than trust the label as-is.
-            if verdict.verdict == "partial" and not verdict.missed_points:
-                verdict.verdict = "correct"
-            elif verdict.verdict == "correct" and verdict.missed_points:
-                verdict.verdict = "partial"
-
-        # ---- 2. score, level, topic advancement (plain Python) --------------
-        # 'unclear' is inert in here: no score change, no consumed question.
-        flags = apply_verdict(session, verdict.verdict)
-        topic_changed = flags["topic_changed"]
-        session_complete = flags["session_complete"]
+        graded = await _grade_and_score(user_id, session_id, payload)
 
         # ---- 3. coach reply (LLM) -------------------------------------------
-        coach_reply = await _coach.phrase_reaction(verdict, question)
+        coach_reply = await _coach.phrase_reaction(graded["verdict"], graded["question"])
 
-        # ---- 4. persist ------------------------------------------------------
-        # The turn row is written even for 'unclear', so the transcript
-        # survives for debugging; the summary query filters those rows out.
-        update_turn_answered(
-            turn_id=turn["turn_id"],
-            transcript=payload.transcript,
-            verdict=verdict,
-            coach_reply=coach_reply,
-            grade_ms=grade_ms,
-            stt_ms=payload.stt_ms,
-        )
-        update_session(session)
-
-        # ---- 5. next question -------------------------------------------------
-        next_question = None
-        if verdict.verdict == "unclear":
-            # STT failed to produce anything usable - re-serve the SAME
-            # question rather than drawing a new one from the pool. Drawing a
-            # new one would silently skip a question the student never
-            # actually got to answer, contradicting the coach's "could not
-            # catch that, please repeat" reply.
-            next_turn = insert_turn_asked(session_id, question, session["level"])
-            next_question = _question_out(question, next_turn["turn_index"])
-        elif not session_complete:
-            nq = pick_question(
-                document_id=session["document_id"],
-                session_id=session_id,
-                topic=session["current_topic"],
-                level=session["level"],
-            )
-            if nq is None:
-                # Topic exhausted with nothing left to ask: end cleanly rather
-                # than leaving the session active with no way forward.
-                session["status"] = "completed"
-                update_session(session)
-                session_complete = True
-            else:
-                next_turn = insert_turn_asked(session_id, nq, session["level"])
-                next_question = _question_out(nq, next_turn["turn_index"])
-
-        return {
-            "verdict": verdict.verdict,
-            "matched_points": verdict.matched_points,
-            "missed_points": verdict.missed_points,
-            "confidence": verdict.confidence,
-            "coach_reply": coach_reply,
-            "score": session["score"],
-            "level": session["level"],
-            "current_topic": session["current_topic"],
-            "questions_asked": session["questions_asked"],
-            "correct_count": session["correct_count"],
-            "topic_changed": topic_changed,
-            "session_complete": session_complete,
-            "next_question": next_question,
-        }
+        return _finish_turn(session_id, graded, coach_reply, payload)
     except HTTPException:
         raise
     except Exception as e:
         log.exception("handleSubmitAnswer: failed session_id=%s", session_id)
+        raise CustomException(e, sys)
+
+
+async def handleSubmitAnswerStreaming(
+    user_id: int,
+    session_id: int,
+    payload,
+    on_chunk,
+) -> Dict[str, Any]:
+    """Answer a turn, streaming the coach reply instead of awaiting all of it.
+
+    Same engine as handleSubmitAnswer - identical grading, scoring and
+    selection - but the coach's reply is emitted as it is produced rather
+    than after it is finished.
+
+    on_chunk(text) is awaited once per speech-sized phrase, and is
+    responsible for both halves of that phrase: sending its text and
+    synthesising its audio. Text is deliberately NOT emitted per token.
+    Tokens arrive as fast as the LLM writes them, which is far faster than
+    speech - so rendering per token puts the words minutes ahead of the
+    voice reading them. Emitting per phrase, paired with its own audio, is
+    what lets the client reveal each phrase as it is spoken.
+
+    Returns the same dict handleSubmitAnswer returns, for the caller to send
+    once the stream is done.
+    """
+    try:
+        graded = await _grade_and_score(user_id, session_id, payload)
+
+        # ---- 3. coach reply (LLM, streamed) ---------------------------------
+        parts: List[str] = []
+
+        async def _tokens():
+            async for token in _coach.stream_reaction(graded["verdict"], graded["question"]):
+                parts.append(token)
+                yield token
+
+        t0 = time.perf_counter()
+        first_chunk_ms = None
+        async for chunk in achunk_tokens(_tokens()):
+            if first_chunk_ms is None:
+                first_chunk_ms = int((time.perf_counter() - t0) * 1000)
+            await on_chunk(chunk)
+
+        coach_reply = "".join(parts).strip()
+        log.info(
+            "handleSubmitAnswerStreaming: session_id=%s first coach chunk in %sms",
+            session_id, first_chunk_ms,
+        )
+
+        # The persisted reply is the joined stream, so the turn row holds
+        # exactly what the student heard.
+        return _finish_turn(session_id, graded, coach_reply, payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("handleSubmitAnswerStreaming: failed session_id=%s", session_id)
         raise CustomException(e, sys)
 
 
@@ -389,16 +491,25 @@ def handleSkipQuestion(request: Request, session_id: int, payload) -> Dict[str, 
         raise CustomException(e, sys)
 
 
-def handleGetSession(request: Request, session_id: int) -> Dict[str, Any]:
+async def handleGetSession(request: Request, session_id: int) -> Dict[str, Any]:
     """GET /sessions/{id} - replay a past session."""
     try:
         user_id = request.state.user["user_id"]
-        session = get_session_for_user(session_id=session_id, user_id=user_id)
+        # The turns key off session_id alone, so they are fetched alongside
+        # the ownership check rather than after it; only the document lookup
+        # genuinely depends on the session row.
+        session, rows = await asyncio.gather(
+            asyncio.to_thread(
+                get_session_for_user, session_id=session_id, user_id=user_id
+            ),
+            asyncio.to_thread(get_session_turns, session_id),
+        )
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        doc = get_document_for_user(document_id=session["document_id"], user_id=user_id)
-        rows = get_session_turns(session_id)
+        doc = await asyncio.to_thread(
+            get_document_for_user, document_id=session["document_id"], user_id=user_id
+        )
 
         turns = []
         for row in rows:
@@ -453,16 +564,45 @@ async def handleSessionSummary(request: Request, session_id: int) -> Dict[str, A
     """GET /sessions/{id}/summary - per-topic breakdown, weakest first."""
     try:
         user_id = request.state.user["user_id"]
-        session = get_session_for_user(session_id=session_id, user_id=user_id)
+        session = await asyncio.to_thread(
+            get_session_for_user, session_id=session_id, user_id=user_id
+        )
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
 
         document_id = session["document_id"]
-        doc = get_document_for_user(document_id=document_id, user_id=user_id)
+
+        # Every query below depends only on session/document_id, never on each
+        # other - so they go out together rather than one after another. Each
+        # is a round trip to Neon (~0.5s warm), and run serially they were the
+        # bulk of this endpoint's latency. They are sync functions, so each
+        # occupies a threadpool slot for its round trip; gather lets the waits
+        # overlap instead of queueing.
+        (
+            doc,
+            rows,
+            prior,
+            all_topics,
+            covered_rows,
+        ) = await asyncio.gather(
+            asyncio.to_thread(
+                get_document_for_user, document_id=document_id, user_id=user_id
+            ),
+            asyncio.to_thread(get_session_turns, session_id),
+            asyncio.to_thread(
+                get_prior_topic_results,
+                user_id=user_id,
+                document_id=document_id,
+                exclude_session_id=session_id,
+            ),
+            asyncio.to_thread(_ordered_document_topics, document_id),
+            asyncio.to_thread(
+                getAllTurnsTopics, user_id=user_id, document_id=document_id
+            ),
+        )
 
         # 'unclear' turns are excluded throughout: they weren't the student's
         # fault and must not show up as misses.
-        rows = get_session_turns(session_id)
         by_topic: Dict[str, Dict[str, int]] = {}
         parents: Dict[str, Any] = {}
         for row in rows:
@@ -482,12 +622,9 @@ async def handleSessionSummary(request: Request, session_id: int) -> Dict[str, A
                 stats["missed"] += 1
             parents.setdefault(topic, None)
 
-        # How the same topics went in this user's earlier sessions on this
-        # document, so a revisited topic can be reported as better or worse
-        # rather than as an isolated score.
-        prior = get_prior_topic_results(
-            user_id=user_id, document_id=document_id, exclude_session_id=session_id
-        )
+        # prior: how the same topics went in this user's earlier sessions on
+        # this document, so a revisited topic reads as better or worse rather
+        # than as an isolated score. Fetched in the gather above.
 
         topic_results = []
         for topic, s in by_topic.items():
@@ -529,8 +666,7 @@ async def handleSessionSummary(request: Request, session_id: int) -> Dict[str, A
         # remaining_topics spans ALL of this user's sessions on the document,
         # not just this one - that is what makes the "continue?" loop work
         # across rounds.
-        all_topics = _ordered_document_topics(document_id)
-        covered = {r["topic"] for r in getAllTurnsTopics(user_id=user_id, document_id=document_id)}
+        covered = {r["topic"] for r in covered_rows}
         remaining_topics = [t for t in all_topics if t not in covered]
 
         # Narrative is generated once on completion and cached: regenerating
@@ -540,7 +676,7 @@ async def handleSessionSummary(request: Request, session_id: int) -> Dict[str, A
         if narrative is None and session["status"] == "completed" and topic_results:
             narrative = await _generate_narrative(topic_results, total_asked, total_correct)
             if narrative:
-                save_summary_text(session_id, narrative)
+                await asyncio.to_thread(save_summary_text, session_id, narrative)
 
         return {
             "session_id": session_id,

@@ -21,4 +21,5 @@ PyJWT
 python-multipart
 aiofiles
 pydantic[email]
+langchain-mistralai
 # -e .

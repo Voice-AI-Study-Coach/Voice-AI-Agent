@@ -8,12 +8,12 @@ answer phrased differently must still be graded correct.
 import sys
 from typing import List
 
-from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from llm.schemas import GradeVerdict
 from llm.prompts import grading_system_prompt, grading_human_prompt
-from llm.rotation_shifting import groq_pool, is_rate_limit_error
+from llm.rotation_shifting import mistral_pool, is_rate_limit_error
 from src.logger import logging
 from src.exception import CustomException
 
@@ -21,7 +21,7 @@ from src.exception import CustomException
 class Grading:
     """Semantic answer grading using LLM evaluation."""
 
-    def __init__(self, model: str = "openai/gpt-oss-120b"):
+    def __init__(self, model: str = "mistral-medium-3-5"):
         # temperature=0: grading must be deterministic, the same answer has to
         # produce the same verdict every time.
         self.model = model
@@ -33,16 +33,16 @@ class Grading:
         The key is fetched per call, not stored on the instance: a key held
         from __init__ can't rotate away when it gets cooled down.
 
-        with_structured_output(GradeVerdict) uses Groq's native tool-calling
-        to guarantee the response matches the schema - unlike
+        with_structured_output(GradeVerdict) uses native tool-calling to
+        guarantee the response matches the schema - unlike
         PydanticOutputParser, which just asks the model to produce matching
-        JSON in plain text and best-effort parses whatever comes back. Groq,
-        OpenAI and Claude models all support this properly; the manual
-        parser is only needed as a fallback for models without native
-        structured output (e.g. some Ollama models).
+        JSON in plain text and best-effort parses whatever comes back.
+        Mistral, Groq, OpenAI and Claude models all support this properly;
+        the manual parser is only needed as a fallback for models without
+        native structured output (e.g. some Ollama models).
         """
-        key = groq_pool.get_key()
-        llm = ChatGroq(model=self.model, temperature=self.temperature, api_key=key)
+        key = mistral_pool.get_key()
+        llm = ChatMistralAI(model=self.model, temperature=self.temperature, api_key=key)
         return key, llm.with_structured_output(GradeVerdict)
 
     async def grade_answer(
@@ -74,11 +74,11 @@ class Grading:
             ]
 
             last_exc = None
-            for _ in range(len(groq_pool._keys)):
+            for _ in range(len(mistral_pool._keys)):
                 key, llm = self._llm()
                 try:
                     verdict = await llm.ainvoke(messages)
-                    groq_pool.mark_success(key)
+                    mistral_pool.mark_success(key)
                     logging.info(
                         f"Graded answer: verdict={verdict.verdict} "
                         f"confidence={verdict.confidence}"
@@ -86,12 +86,12 @@ class Grading:
                     return verdict
                 except Exception as e:
                     if is_rate_limit_error(e):
-                        groq_pool.mark_rate_limited(key)
+                        mistral_pool.mark_rate_limited(key)
                         last_exc = e
                         continue
                     raise
 
-            raise CustomException(last_exc or "All Groq keys are rate-limited", sys)
+            raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)
         except Exception as e:
             logging.error(f"Error grading answer: {e}")
             raise CustomException(e, sys)

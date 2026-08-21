@@ -6,13 +6,14 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_classic.output_parsers import PydanticOutputParser
 
 from src.exception import CustomException
 from llm.schemas import GeneratedQuestions
 from llm.prompts import build_q_prompt
-from llm.rotation_shifting import groq_pool, is_rate_limit_error, is_transient_tool_error
+from llm.rotation_shifting import mistral_pool, is_rate_limit_error, is_transient_tool_error
 
 load_dotenv()
 
@@ -22,16 +23,16 @@ class QuestionGenerator:
         self.chunks = chunks
         self.sem = asyncio.Semaphore(concurrency)
 
-    def _structured_groq(self):
-        """Build a Groq structured-output client using a key that isn't rate-limited.
+    def _structured_mistral(self):
+        """Build a Mistral structured-output client using a key that isn't rate-limited.
 
-        Uses json_mode instead of native tool-calling: Groq's function-call
-        framing is prone to "tool_use_failed" on short/terse fields (common in
+        Uses json_mode instead of native tool-calling: function-call framing is
+        prone to "tool_use_failed" on short/terse fields (common in
         low-difficulty questions), whereas json_mode just asks for raw JSON
         and is far more reliable for this schema.
         """
-        key = groq_pool.get_key()
-        model = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.1, api_key=key)
+        key = mistral_pool.get_key()
+        model = ChatMistralAI(model="mistral-medium-3-5", temperature=0.1, api_key=key)
         return key, model.with_structured_output(schema=GeneratedQuestions, method="json_mode")
 
     async def gen_one(self, topic, parent, chunk_list):
@@ -42,19 +43,19 @@ class QuestionGenerator:
         )
 
         async with self.sem:
-            max_key_rotations = len(groq_pool._keys)
+            max_key_rotations = len(mistral_pool._keys)
             for attempt in range(4):
                 result, hard_error = None, None
 
                 for _ in range(max_key_rotations):
-                    key, structured = self._structured_groq()
+                    key, structured = self._structured_mistral()
                     try:
                         result = await structured.ainvoke(prompt)
-                        groq_pool.mark_success(key)
+                        mistral_pool.mark_success(key)
                         break
                     except Exception as e:
                         if is_rate_limit_error(e):
-                            groq_pool.mark_rate_limited(key)
+                            mistral_pool.mark_rate_limited(key)
                             continue
                         if is_transient_tool_error(e):
                             # not a rate limit, but worth retrying (via the
@@ -71,7 +72,7 @@ class QuestionGenerator:
                     ]
 
                 if attempt == 3 or hard_error is not None:
-                    reason = hard_error if hard_error is not None else "all Groq keys rate-limited"
+                    reason = hard_error if hard_error is not None else "all Mistral keys rate-limited"
                     print(f"  {topic} failed: {reason}")
                     return []
                 await asyncio.sleep(2 ** attempt)

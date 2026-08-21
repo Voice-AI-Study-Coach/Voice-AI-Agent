@@ -10,12 +10,12 @@ from __future__ import annotations
 import sys
 from typing import Any, AsyncIterator, Dict
 
-from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from llm.prompts import coaching_human_prompt, coaching_system_prompt
 from llm.schemas import GradeVerdict
-from llm.rotation_shifting import groq_pool, is_rate_limit_error
+from llm.rotation_shifting import mistral_pool, is_rate_limit_error
 from src.logger import logging
 from src.exception import CustomException
 
@@ -23,15 +23,15 @@ from src.exception import CustomException
 class Coaching:
     """Generate spoken coaching feedback from a grading verdict."""
 
-    def __init__(self, model: str = "llama-3.3-70b-versatile", temperature: float = 0.5):
+    def __init__(self, model: str = "mistral-medium-3-5", temperature: float = 0.5):
         # Warmer than the grader on purpose: this text is spoken aloud, and a
         # temperature-0 coach sounds robotic saying the same phrase every turn.
         self.model = model
         self.temperature = temperature
 
     def _llm(self):
-        key = groq_pool.get_key()
-        return key, ChatGroq(model=self.model, temperature=self.temperature, api_key=key)
+        key = mistral_pool.get_key()
+        return key, ChatMistralAI(model=self.model, temperature=self.temperature, api_key=key)
 
     async def phrase_reaction(self, verdict: GradeVerdict, question: Dict[str, Any]) -> str:
         """Turn a verdict into short spoken feedback (plain text, TTS-ready)."""
@@ -42,6 +42,7 @@ class Coaching:
                 or question.get("prompt")
                 or str(question)
             )
+            ideal_answer = question.get("ideal_answer") or ""
 
             messages = [
                 SystemMessage(content=coaching_system_prompt()),
@@ -51,24 +52,25 @@ class Coaching:
                     confidence=verdict.confidence,
                     matched_points=verdict.matched_points,
                     missed_points=verdict.missed_points,
+                    ideal_answer=ideal_answer,
                 )),
             ]
 
             last_exc = None
-            for _ in range(len(groq_pool._keys)):
+            for _ in range(len(mistral_pool._keys)):
                 key, llm = self._llm()
                 try:
                     response = await llm.ainvoke(messages)
-                    groq_pool.mark_success(key)
+                    mistral_pool.mark_success(key)
                     return str(response.content).strip()
                 except Exception as e:
                     if is_rate_limit_error(e):
-                        groq_pool.mark_rate_limited(key)
+                        mistral_pool.mark_rate_limited(key)
                         last_exc = e
                         continue
                     raise
 
-            raise CustomException(last_exc or "All Groq keys are rate-limited", sys)
+            raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)
         except Exception as e:
             logging.error(f"Error phrasing coach reply: {e}")
             raise CustomException(e, sys)
@@ -89,6 +91,7 @@ class Coaching:
             or question.get("prompt")
             or str(question)
         )
+        ideal_answer = question.get("ideal_answer") or ""
         messages = [
             SystemMessage(content=coaching_system_prompt()),
             HumanMessage(content=coaching_human_prompt(
@@ -97,23 +100,24 @@ class Coaching:
                 confidence=verdict.confidence,
                 matched_points=verdict.matched_points,
                 missed_points=verdict.missed_points,
+                ideal_answer=ideal_answer,
             )),
         ]
         last_exc = None
-        for _ in range(len(groq_pool._keys)):
+        for _ in range(len(mistral_pool._keys)):
             key, llm = self._llm()
             try:
                 async for chunk in llm.astream(messages):
                     content = getattr(chunk, "content", "")
                     if content:
                         yield str(content)
-                groq_pool.mark_success(key)
+                mistral_pool.mark_success(key)
                 return
             except Exception as e:
                 if is_rate_limit_error(e):
-                    groq_pool.mark_rate_limited(key)
+                    mistral_pool.mark_rate_limited(key)
                     last_exc = e
                     continue
                 logging.error(f"Error streaming coach reply: {e}")
                 raise CustomException(e, sys)
-        raise CustomException(last_exc or "All Groq keys are rate-limited", sys)
+        raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)

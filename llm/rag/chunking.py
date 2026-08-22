@@ -2,6 +2,8 @@ import os
 import sys
 import re
 
+from concurrent.futures import ThreadPoolExecutor
+
 from langchain_ollama import ChatOllama
 from langchain_mistralai import ChatMistralAI
 from langchain_groq import ChatGroq
@@ -15,6 +17,14 @@ from dotenv import load_dotenv
 from langchain_classic.output_parsers import PydanticOutputParser
 
 load_dotenv()
+
+# How many chunking windows are in flight at once. Every window competes for
+# the same Mistral key pool that grading, coaching and question generation
+# also use, so this is deliberately well under the number of keys: firing all
+# windows at once would rate-limit every key simultaneously and the retry
+# loop would then serialise them anyway, slower than not parallelising.
+CHUNK_CONCURRENCY = 4
+
 
 class Chunking:
     def __init__(self, doc, toc):
@@ -44,6 +54,12 @@ class Chunking:
                 raise
         raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)
 
+    def _sections_for(self, prompt):
+        """One window's sections. Separate method so it can be mapped over a
+        thread pool; the key rotation inside is already per-call and
+        thread-safe (KeyPool guards its own state with a lock)."""
+        return self._invoke_with_rotation(prompt).sections
+
     def documentChunking(self):
         try:
             full, page_starts = "", []
@@ -57,19 +73,31 @@ class Chunking:
                 if len(clean) > 3 and re.search(r'[A-Za-z]{3,}', clean):
                     hints.append(clean)
             lines = full.split("\n")
-            numbered = "\n".join(f"{i}: {l}" for i, l in enumerate(lines))
             WINDOW = 150
-            raw_secs = []
 
+            prompts = []
             for start in range(0, len(lines), WINDOW):
                 window = lines[start:start + WINDOW]
                 numbered_w = "\n".join(f"{start+i}: {l}" for i, l in enumerate(window))
-                prompt = chunking_prompt(
-                    hints=hints,
-                    numbered_w=numbered_w
-                )
-                raw_secs.extend(self._invoke_with_rotation(prompt).sections)
-                            
+                prompts.append(chunking_prompt(hints=hints, numbered_w=numbered_w))
+
+            # One LLM call per window, run CONCURRENTLY. The windows are
+            # independent - each is told its own absolute line numbers, and the
+            # sections come back sorted by start_line below - so the order they
+            # finish in does not matter. Run serially this was the slowest part
+            # of ingestion by far: a 3000-line PDF is 20 windows, each a few
+            # seconds, one after another.
+            #
+            # Threads rather than asyncio: the Mistral client here is sync, and
+            # documentChunking itself is called from a thread by the ingestion
+            # service. Capped because every window competes for the same key
+            # pool, and firing 20 at once just rate-limits every key at the
+            # same moment.
+            raw_secs = []
+            with ThreadPoolExecutor(max_workers=CHUNK_CONCURRENCY) as pool:
+                for sections in pool.map(self._sections_for, prompts):
+                    raw_secs.extend(sections)
+
             raw_secs.sort(key=lambda s: s.start_line)
             secs = []
             for s in raw_secs:

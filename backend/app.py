@@ -92,7 +92,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://voice-ai-agent-aps8.vercel.app",
+        "https://voice-ai-agent-ulvh.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],

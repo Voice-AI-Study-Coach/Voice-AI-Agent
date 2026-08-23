@@ -23,7 +23,7 @@ class Embedding:
         # rejects outright on insert.
         model = MistralAIEmbeddings(
             model="mistral-embed-2312",
-            google_api_key=key,
+            api_key=key,
         )
         return key, model
 

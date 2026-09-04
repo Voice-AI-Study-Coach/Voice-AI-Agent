@@ -23,7 +23,7 @@ from src.exception import CustomException
 class Coaching:
     """Generate spoken coaching feedback from a grading verdict."""
 
-    def __init__(self, model: str = "mistral-medium-3-5", temperature: float = 0.5):
+    def __init__(self, model: str = "open-mistral-7b", temperature: float = 0.5):
         # Warmer than the grader on purpose: this text is spoken aloud, and a
         # temperature-0 coach sounds robotic saying the same phrase every turn.
         self.model = model

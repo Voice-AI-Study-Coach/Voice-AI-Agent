@@ -48,7 +48,5 @@ class Embedding:
                         last_exc = e
                         continue
                     raise
-
-            raise CustomException(last_exc or "All Gemini keys are rate-limited", sys)
         except Exception as e:
-            raise CustomException(e, sys)
+            raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)

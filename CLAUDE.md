@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Voice AI Study Coach: upload a PDF, an ingestion pipeline turns it into topic chunks + generated questions, and a quiz engine runs an adaptive spoken oral exam over them. FastAPI backend + Next.js frontend + Supabase (Postgres with pgvector).
+Voice AI Study Coach: upload a PDF, an ingestion pipeline turns it into topic chunks + generated questions, and a quiz engine runs an adaptive spoken oral exam over them. FastAPI backend + Next.js frontend + Neon (Postgres with pgvector), with Deepgram for speech in and out.
 
 ## Commands
 
-Backend (run from the repo root — all imports are absolute from the root package, e.g. `backend.`, `llm.`, `src.`, `supabase_client.`):
+Backend (run from the repo root — all imports are absolute from the root package, e.g. `backend.`, `llm.`, `src.`):
 
 ```bash
 venv\Scripts\activate            # Windows; source venv/bin/activate elsewhere
@@ -35,7 +35,9 @@ Run the frontend and backend together — the frontend has no direct backend URL
 
 `routes/` → `controllers/` → `utils/` (Supabase queries) with `models/` holding the Pydantic request/response schemas. `services/` holds background orchestration, not request handling. Business logic lives in controllers; routes are thin and only translate exceptions.
 
-Auth is a router-level `Depends(verify_jwt)` on `rag_router` and `session_router`. It reads a Bearer header or the `access_token` cookie, decodes with `JWT_SECRET_KEY`, and puts the user row on `request.state.user`.
+Auth is a router-level `Depends(verify_jwt)` on `rag_router`, `session_router`, and `speech_router`. It reads a Bearer header or the `access_token` cookie, decodes with `JWT_SECRET_KEY`, and puts the user row on `request.state.user`.
+
+WebSocket routes live on separate routers (`session_ws_router`, `speech_ws_router`) deliberately *without* that dependency: `verify_jwt` expects a `Request`, and a WebSocket is not one. WS handlers must `await verify_jwt_ws(websocket)` themselves **before** `websocket.accept()` and close the socket if it raises — once the handshake is accepted it is too late to reject it. The `access_token` cookie rides along on the handshake, so no separate auth message is needed.
 
 Exceptions: wrap non-HTTP failures in `CustomException(e, sys)` (from `src/exception.py` — it needs the `sys` module to read the traceback). Always re-raise `HTTPException` before the generic `except`, or 404s and 409s become 500s.
 
@@ -59,6 +61,17 @@ Level and score reset to `BASELINE_*` at every topic boundary — they are never
 
 Stages: PyMuPDF parse (+ TOC as chunking hints) → LLM semantic chunking (150-line windows) → embedding and question generation concurrently via `asyncio.gather` (`generateEmbedding` is sync so it goes through `asyncio.to_thread`) → persist chunks then questions → `status="ready"`.
 
+### Speech layer
+
+Speech is server-side Deepgram, not the browser's engine: `nova-3` for transcription, `aura-2-thalia-en` for voice ([backend/controllers/speech_controllers.py](backend/controllers/speech_controllers.py)). The browser only records audio and plays it back.
+
+Three delivery paths, each for a reason worth preserving:
+- `GET /speech/speak` streams mp3 and exists so an `<audio>` element can point straight at the URL and play progressively; a `fetch` would stall until the whole clip downloaded. The cookie rides along, so auth still holds.
+- `POST /speech/speak` is the same thing for callers that prefer a body.
+- `WS /speech/speak-stream` yields raw linear16 PCM at 24kHz — `aura-2` over `speak.v1.connect()` rejects mp3 on that path. Because PCM frames alone can't mark end-of-utterance, the server sends `{"type":"done"}` after each line; errors come back as `{"type":"error"}` and leave the socket open for the next line.
+
+`SpeechStreamSession` opens its Deepgram socket lazily on the first line and reuses it for the connection's lifetime, and the WS handler must close it in a `finally` — otherwise an abandoned tab leaks the connection until Deepgram's own idle timeout reaps it.
+
 ### Topic strings are the join key
 
 `chunks.topic`, `questions.topic`, and `turns.topic` are joined on the string itself. A mismatch does not error — `get_topic_source_material` just returns nothing and grading silently loses its grounding. This is why `handleSession` validates selected topics against the document up front.
@@ -69,15 +82,19 @@ Session and document ids are sequential integers. Every `*_for_user` lookup filt
 
 ### Key rotation
 
-Every Groq/Gemini/Cerebras call must pull its key from the pools in [llm/rotation_shifting.py](llm/rotation_shifting.py) (`GROQ_API_KEY_1..n` etc., falling back to a single unnumbered var). Fetch the key *per call*, never cache one on `self` in `__init__` — a held key can't rotate away when it gets cooled down. The pattern is: loop over `len(pool._keys)`, build a client, on `is_rate_limit_error(e)` call `mark_rate_limited(key)` and retry, on success call `mark_success(key)`.
+Every provider call must pull its key from the pools in [llm/rotation_shifting.py](llm/rotation_shifting.py) — `groq_pool`, `gemini_pool`, `mistral_pool`, `deepgram_pool` (`GROQ_API_KEY_1..n` etc., falling back to a single unnumbered var). Fetch the key *per call*, never cache one on `self` in `__init__` — a held key can't rotate away when it gets cooled down. The pattern is: loop over `len(pool._keys)`, build a client, on `is_rate_limit_error(e)` call `mark_rate_limited(key)` and retry, on success call `mark_success(key)`.
 
-### Supabase client
+### Database access
 
-`supabase_client/client.py` exports a thread-local proxy, not a plain client. FastAPI runs sync handlers in a threadpool, and sharing supabase-py's single httpx HTTP/2 connection across threads corrupts the stream (on Windows: `WinError 10035`). Import `client` from there; never call `create_client` directly.
+The database is Neon Postgres, reached directly with psycopg — there is no Supabase client (an older revision used one; ignore any lingering references). [backend/db.py](backend/db.py) owns a `ConnectionPool` and exports `fetch_one` / `fetch_all` / `execute` / `execute_returning` / `execute_returning_many`. Write SQL through those helpers rather than opening cursors by hand; rows come back as plain dicts via `dict_row`.
 
-### Startup reapers
+Neon suspends idle compute, which shapes three things in the pool: `min_size=0` so app startup doesn't fail against a sleeping endpoint, `check=ConnectionPool.check_connection` so a connection killed by a suspend is replaced instead of handed out dead, and a periodic `ping()` keep-alive so requests don't pay the ~5s cold start. `register_vector` is applied per connection — without it a list of floats can't bind to a `vector` column.
 
-`run_reapers()` runs in the app lifespan and clears rows nothing else will move: documents stuck in `processing` past `INGESTION_STUCK_MINUTES`, and active sessions idle past `SESSION_IDLE_MINUTES`.
+### Startup is deliberately non-blocking
+
+The lifespan opens the pool, then pushes the Neon wake-up ping and `run_reapers()` into a background task rather than awaiting them. Both used to block the first request (~5s wake + reaper time). Keep new startup work off that path unless a request genuinely cannot be served without it.
+
+`run_reapers()` clears rows nothing else will move: documents stuck in `processing` past `INGESTION_STUCK_MINUTES`, and active sessions idle past `SESSION_IDLE_MINUTES`.
 
 ## Frontend notes
 
@@ -87,4 +104,6 @@ App Router with `(app)` and `(auth)` route groups. All backend calls go through 
 
 ## Environment
 
-`.env` at the repo root: numbered provider keys (`GROQ_API_KEY_1..n`, `GEMINI_API_KEY_1..n`, `CEREBRAS_API_KEY_1..n`), `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `JWT_SECRET_KEY`. `backend/app.py` pins CORS to `http://localhost:3000` with `allow_credentials=True` — `"*"` is not permitted alongside credentials.
+`.env` at the repo root: numbered provider keys (`GROQ_API_KEY_1..n`, `GEMINI_API_KEY_1..n`, `MISTRAL_API_KEY_1..n`, `DEEPGRAM_API_KEY_1..n`), `NEON_DATABASE_URL`, `JWT_SECRET_KEY`, optional `UPLOAD_DIR`. `backend/app.py` allows exactly two CORS origins (localhost:3000 and the deployed Vercel app) with `allow_credentials=True` — `"*"` is not permitted alongside credentials, so a new deploy origin has to be added to that list explicitly.
+
+Note that `README.md` still documents the older Supabase/Cerebras setup; this file reflects the current code.

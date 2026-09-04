@@ -19,6 +19,11 @@ export const SILENCE_GRACE_MS = 120_000;
 /** How often to poll document status while ingestion runs. */
 export const INGESTION_POLL_MS = 2_500;
 
+/** Largest upload the backend accepts. Mirrors MAX_UPLOAD_BYTES in
+ *  backend/config.py - shown in the upload copy so the stated limit and the
+ *  enforced one cannot drift apart. */
+export const MAX_UPLOAD_MB = 60;
+
 /** Shortest recording accepted as a real answer. Below this the tap is
  *  treated as a mis-tap: there is not enough audio to transcribe, and
  *  submitting it only produces an 'unclear' verdict that re-asks the same

@@ -37,7 +37,16 @@ LEVEL_WIDENING_OFFSETS = (0, 1, -1, 2, -2)
 CONFIDENCE_HEDGE = 0.6       # below this the coach hedges its wording
 
 # --- Uploads ---------------------------------------------------------------
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+# The upload is read into memory in one go to hash it, so this is what stops a
+# large file from exhausting the process - the Next proxy in front is
+# deliberately uncapped so it never truncates a body mid-stream. Scanned notes
+# run ~400KB a page, so 50 pages of handwriting lands near 20MB.
+MAX_UPLOAD_BYTES = 60 * 1024 * 1024
+
+# Extractable characters a PDF must have before it counts as printed. Below
+# this it is treated as handwritten/scanned and goes to the OCR pipeline, so
+# raising it sends more documents down the slower, more expensive vision path.
+TEXT_LAYER_MIN_CHARS = 200
 
 # --- Reapers ---------------------------------------------------------------
 SESSION_IDLE_MINUTES = 60    # active session with no answers -> abandoned

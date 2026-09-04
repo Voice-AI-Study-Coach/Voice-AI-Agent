@@ -85,7 +85,7 @@ def handleSession(request: Request, payload) -> Dict[str, Any]:
         doc = get_document_for_user(document_id=document_id, user_id=user_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Document not found")
-        if doc["status"] != "ready":
+        if doc["status"] not in ("ready", "generating"):
             raise HTTPException(
                 status_code=409,
                 detail=f"Document is not ready (status: {doc['status']})",

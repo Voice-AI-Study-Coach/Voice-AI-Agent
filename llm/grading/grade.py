@@ -21,7 +21,7 @@ from src.exception import CustomException
 class Grading:
     """Semantic answer grading using LLM evaluation."""
 
-    def __init__(self, model: str = "mistral-medium-3-5"):
+    def __init__(self, model: str = "open-mistral-7b"):
         # temperature=0: grading must be deterministic, the same answer has to
         # produce the same verdict every time.
         self.model = model

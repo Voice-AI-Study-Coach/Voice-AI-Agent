@@ -1,4 +1,5 @@
 import sys
+import asyncio
 import logging
 from typing import List
 
@@ -19,7 +20,12 @@ from backend.models.rag_schemas import (
     DocumentTopicsResponse,
     NewChatResponse,
 )
-from backend.services.rag_services import run_ingestion
+from backend.services.rag_services import (
+    run_ingestion,
+    run_ocr_ingestion,
+    get_document_path,
+    has_text_layer,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +47,18 @@ async def chat(
         # the whole pipeline is skipped - minutes of work and a large number
         # of LLM calls avoided.
         if not doc["already_seen"]:
-            background_tasks.add_task(run_ingestion, doc["document_id"])
-            log.info("newChat: queued run_ingestion for document_id=%s", doc["document_id"])
+            # Which pipeline the document needs depends on whether it has a
+            # text layer: printed PDFs go through the fast PyMuPDF path,
+            # handwritten and scanned ones need the vision pass. to_thread
+            # because opening the PDF is blocking, and this runs inside an
+            # async handler where it would park the event loop.
+            path = await asyncio.to_thread(get_document_path, doc["document_id"])
+            printed = await asyncio.to_thread(has_text_layer, path)
+
+            task = run_ingestion if printed else run_ocr_ingestion
+            background_tasks.add_task(task, doc["document_id"])
+            log.info("newChat: queued %s for document_id=%s (text_layer=%s)",
+                     task.__name__, doc["document_id"], printed)
         return doc
     except HTTPException:
         raise

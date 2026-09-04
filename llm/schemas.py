@@ -44,3 +44,37 @@ class GradeVerdict(BaseModel):
         extra = 'forbid'
         anystr_strip_whitespace = True
 
+class PageBlocks(BaseModel):
+    blocks: List[str] = Field(
+        description="List of raw, faithfully transcribed text, formulas, or code blocks from the page."
+    )
+
+class TopicChunk(BaseModel):
+    parent: str = Field(
+        description="Top-level concept (e.g., 'Divide and Conquer Method', 'Merge Sort', 'Master Method', 'Knapsack Problem')"
+    )
+    topic: Optional[str] = Field(
+        None, 
+        description="Specific sub-section (e.g., 'General Recurrence Derivation', 'Iterative Algorithm', 'Execution Trace Example')"
+    )
+    content: str = Field(
+        description="Complete, merged text, formulas, and steps belonging to this topic/subtopic."
+    )
+
+class TopicCluster(BaseModel):
+    canonical: str = Field(
+        description="The single best name for this group of topics, taken from the variants themselves."
+    )
+    variants: List[str] = Field(
+        description="Every topic name from the input that refers to this same topic, copied verbatim."
+    )
+
+class TopicClusters(BaseModel):
+    clusters: List[TopicCluster] = Field(
+        description="Groups of topic names that refer to the same underlying topic."
+    )
+
+class DocumentStructured(BaseModel):
+    chunks: List[TopicChunk] = Field(
+        description="List of all cohesive topic chunks extracted from the entire document."
+    )

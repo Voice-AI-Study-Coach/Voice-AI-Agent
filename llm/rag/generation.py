@@ -19,8 +19,15 @@ load_dotenv()
 
 
 class QuestionGenerator:
-    def __init__(self, chunks, concurrency: int = 3):
+    # Raised from 3: question generation is the longest stage of ingestion (one
+    # call per topic, and an OCR'd document has far more topics than a printed
+    # one), and by the time it runs the chunking calls that also draw on the
+    # Mistral pool have finished. Still well under the number of keys, for the
+    # reason CHUNK_CONCURRENCY documents - firing everything at once just
+    # rate-limits every key and the rotation loop serialises them anyway.
+    def __init__(self, chunks, concurrency: int = 2, document_id: int | None = None):
         self.chunks = chunks
+        self.document_id = document_id
         self.sem = asyncio.Semaphore(concurrency)
 
     def _structured_mistral(self):
@@ -32,7 +39,7 @@ class QuestionGenerator:
         and is far more reliable for this schema.
         """
         key = mistral_pool.get_key()
-        model = ChatMistralAI(model="mistral-medium-3-5", temperature=0.1, api_key=key)
+        model = ChatMistralAI(model="open-mistral-7b", temperature=0.1, api_key=key)
         return key, model.with_structured_output(schema=GeneratedQuestions, method="json_mode")
 
     async def gen_one(self, topic, parent, chunk_list):
@@ -56,6 +63,7 @@ class QuestionGenerator:
                     except Exception as e:
                         if is_rate_limit_error(e):
                             mistral_pool.mark_rate_limited(key)
+                            await asyncio.sleep(0.3)
                             continue
                         if is_transient_tool_error(e):
                             # not a rate limit, but worth retrying (via the
@@ -66,10 +74,18 @@ class QuestionGenerator:
                         break
 
                 if result is not None:
-                    return [
+                    topic_qs = [
                         {**q.model_dump(), "topic": topic, "parent": parent}
                         for q in result.questions
                     ]
+                    if self.document_id and topic_qs:
+                        try:
+                            from backend.utils.rag_utils import insert_questions
+                            await asyncio.to_thread(insert_questions, self.document_id, topic_qs)
+                            print(f"  Persisted {len(topic_qs)} questions for topic '{topic}' (doc_id={self.document_id})")
+                        except Exception as exc:
+                            print(f"  Failed to persist questions for topic '{topic}': {exc}")
+                    return topic_qs
 
                 if attempt == 3 or hard_error is not None:
                     reason = hard_error if hard_error is not None else "all Mistral keys rate-limited"

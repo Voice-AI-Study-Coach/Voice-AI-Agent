@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { INGESTION_POLL_MS } from "@/lib/config";
+import { INGESTION_POLL_MS, MAX_UPLOAD_MB } from "@/lib/config";
 import { useDocuments } from "@/components/app-shell";
 import { Button, Card, cx, ErrorNote, Spinner } from "@/components/ui";
 import { CheckIcon, FileIcon, SparkIcon, UploadIcon } from "@/components/icons";
@@ -191,7 +191,7 @@ function UploadInner() {
                       : "Drop a PDF, or click to browse"}
                 </p>
                 <p className="mt-1 text-[13px] text-ink-faint">
-                  Text-based PDFs only, up to 20 MB
+                  Printed or handwritten PDFs, up to {MAX_UPLOAD_MB} MB
                 </p>
               </div>
             </label>

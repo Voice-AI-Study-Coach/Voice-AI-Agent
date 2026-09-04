@@ -52,14 +52,8 @@ function DocumentInner() {
     try {
       const res = await api.documentTopics(documentId);
       setData(res);
-      // Nothing is pre-selected. Choosing what to study is the user's call,
-      // and a screen that arrives with 21 boxes already ticked reads as the
-      // app having decided for them.
-      setSelected(new Set());
-      // Only ask about covered topics when there are some to ask about.
-      // Arriving from a summary's "keep going" always asks, so the choice is
-      // the first thing on screen when continuing a document.
-      setIncludeCovered(res.covered_topics > 0 ? null : true);
+      // Only set initial state on first load
+      setIncludeCovered((prev) => (prev === null ? (res.covered_topics > 0 ? null : true) : prev));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load topics");
     } finally {
@@ -71,11 +65,27 @@ function DocumentInner() {
     load();
   }, [load]);
 
+  // Live polling while topics are generating in the background
+  useEffect(() => {
+    if (!data) return;
+    if (data.status !== "generating") return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.documentTopics(documentId);
+        setData(res);
+      } catch {
+        /* ignore transient polling errors */
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [documentId, data?.status]);
+
   const visible = useMemo(() => {
     if (!data) return [];
-    // Topics with no generated questions are hidden rather than shown
-    // disabled: the user cannot act on them, and a greyed row that refuses to
-    // tick just raises a question the screen never answers.
+    // Topics with no generated questions are hidden until ready:
+    // they pop up live as soon as their questions land in Postgres.
     const quizzable = data.topics.filter((t) => t.quizzable);
     if (includeCovered === false) return quizzable.filter((t) => !t.covered);
     return quizzable;
@@ -269,13 +279,34 @@ function DocumentInner() {
 
       {/* Topic list */}
       {quizzable.length === 0 ? (
-        <EmptyState
-          icon={<AlertIcon className="size-5" />}
-          title="No questions were generated"
-          body="This document's sections were too short to write questions from. Try a PDF with more body text per heading."
-        />
+        data.status === "generating" ? (
+          <Card className="mt-8 flex items-center justify-center gap-3.5 border-accent/20 bg-accent-soft/30 p-8 text-center animate-fade-in">
+            <Spinner className="size-5 shrink-0 text-accent" />
+            <div className="text-left">
+              <p className="text-sm font-medium text-ink">Writing questions for your topics…</p>
+              <p className="text-[13px] text-ink-faint">
+                Topics will pop up here live as questions finish generating ({data.topics.length} topics detected).
+              </p>
+            </div>
+          </Card>
+        ) : (
+          <EmptyState
+            icon={<AlertIcon className="size-5" />}
+            title="No questions were generated"
+            body="This document's sections were too short to write questions from. Try a PDF with more body text per heading."
+          />
+        )
       ) : (
         <>
+          {data.status === "generating" && (
+            <div className="mt-6 flex items-center gap-2.5 rounded-xl border border-accent/20 bg-accent-soft/40 px-4 py-3 text-[13px] text-ink-soft animate-fade-in">
+              <Spinner className="size-3.5 shrink-0 text-accent" />
+              <span>
+                Writing questions for remaining topics… ({quizzable.length} of {data.topics.length} ready)
+              </span>
+            </div>
+          )}
+
           <div
             className="mt-8 flex items-center justify-between animate-fade-up"
             style={{ animationDelay: "80ms" }}

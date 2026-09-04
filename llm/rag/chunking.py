@@ -18,12 +18,11 @@ from langchain_classic.output_parsers import PydanticOutputParser
 
 load_dotenv()
 
-# How many chunking windows are in flight at once. Every window competes for
-# the same Mistral key pool that grading, coaching and question generation
-# also use, so this is deliberately well under the number of keys: firing all
-# windows at once would rate-limit every key simultaneously and the retry
-# loop would then serialise them anyway, slower than not parallelising.
-CHUNK_CONCURRENCY = 4
+import time
+
+# How many chunking windows are in flight at once. Concurrency is kept modest (2)
+# to prevent bursting account-level RPM quotas on Mistral's API.
+CHUNK_CONCURRENCY = 2
 
 
 class Chunking:
@@ -34,24 +33,27 @@ class Chunking:
     def _structured_mistral(self):
         """Build a ChatMistralAI structured-output client using a key that isn't rate-limited."""
         key = mistral_pool.get_key()
-        llm = ChatMistralAI(model="mistral-medium-3-5", temperature=0, api_key=key)
+        llm = ChatMistralAI(model="open-mistral-7b", temperature=0, api_key=key)
         return key, llm.with_structured_output(schema=Sections)
 
     def _invoke_with_rotation(self, prompt):
-        """Invoke Mistral, rotating to the next available key on rate-limit errors."""
+        """Invoke Mistral with key rotation, request pacing, and jittered backoff."""
         last_exc = None
-        for _ in range(len(mistral_pool._keys)):
-            key, structured = self._structured_mistral()
-            try:
-                result = structured.invoke(prompt)
-                mistral_pool.mark_success(key)
-                return result
-            except Exception as e:
-                if is_rate_limit_error(e):
-                    mistral_pool.mark_rate_limited(key)
-                    last_exc = e
-                    continue
-                raise
+        for attempt in range(3):
+            for _ in range(len(mistral_pool._keys)):
+                key, structured = self._structured_mistral()
+                try:
+                    result = structured.invoke(prompt)
+                    mistral_pool.mark_success(key)
+                    return result
+                except Exception as e:
+                    if is_rate_limit_error(e):
+                        mistral_pool.mark_rate_limited(key)
+                        last_exc = e
+                        time.sleep(0.3)  # brief stagger before picking next key
+                        continue
+                    raise
+            time.sleep(2.0)  # pause briefly before next pass if all keys are cooling down
         raise CustomException(last_exc or "All Mistral keys are rate-limited", sys)
 
     def _sections_for(self, prompt):

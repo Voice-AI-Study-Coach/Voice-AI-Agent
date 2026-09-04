@@ -74,8 +74,25 @@ def get_storage_path_for_user(document_id: int, user_id: int) -> str | None:
         raise CustomException(e, sys)
 
 def delete_document_row(document_id: int, user_id: int) -> None:
-    """Chunks, questions, sessions and turns go via foreign-key cascade."""
+    """Explicitly clean up child tables (turns, sessions, questions, chunks)
+    before deleting the document row to prevent foreign key RESTRICT violations."""
     try:
+        execute(
+            "delete from turns where session_id in (select session_id from sessions where document_id = %s)",
+            (document_id,),
+        )
+        execute(
+            "delete from sessions where document_id = %s",
+            (document_id,),
+        )
+        execute(
+            "delete from questions where document_id = %s",
+            (document_id,),
+        )
+        execute(
+            "delete from chunks where document_id = %s",
+            (document_id,),
+        )
         execute(
             "delete from documents where document_id = %s and user_id = %s",
             (document_id, user_id),

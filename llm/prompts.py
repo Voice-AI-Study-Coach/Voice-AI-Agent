@@ -237,3 +237,67 @@ def coaching_human_prompt(
         )
     except Exception as e:
         raise CustomException(e, sys)
+
+def transcribe_prompt() -> str:
+    try:
+        return """Transcribe all handwritten and printed text on this page faithfully, in natural reading order.
+        - Break it into natural blocks (headings, paragraphs, pseudo-code/algorithms, formulas, worked derivation steps).
+        - Wrap mathematical equations in LaTeX notation ($...$ or $$...$$).
+        - Transcribe code/algorithms with proper indentation.
+        - Mark completely unreadable words as [illegible].
+        - Skip printed margins, running headers/footers, and page numbers.
+        - Do not skip any topic in the document all topics should be covered.
+        - Do not miss any topic.
+        - Whatever topics are there in the pdf those all topics should be covered by generating the blocks.
+
+        OUTPUT FORMAT:
+        Return ONLY a valid JSON object matching this schema:
+        {
+        "blocks": ["block 1 text...", "block 2 text...", "..."]
+        }
+        """
+    except Exception as e:
+        raise CustomException(e, sys)
+    
+def cluster_topics_prompt(topics: list[str]) -> str:
+    """Second grouping pass: the windows each named their topics independently,
+    so the same section comes back under several near-identical names. Only the
+    names are sent, never the content, which keeps this one call small."""
+    try:
+        numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(topics))
+        return f"""You are organizing the topic names extracted from one set of computer science lecture notes.
+
+            The notes were processed in separate sections, so the SAME topic was often named differently each time
+            (e.g. "Merge Sort", "Merge Sort Algorithm", "Merge Sort (contd)", "Merging Procedure" may all be one topic).
+
+            Group the names below so that every group refers to ONE underlying topic.
+
+            Rules:
+            1. Only group names that are genuinely the same topic. "Quick Sort" and "Merge Sort" are different topics, however similar the wording.
+            2. A name that matches nothing else forms a group on its own.
+            3. Copy every variant EXACTLY as written below - do not correct spelling, expand abbreviations, or reword.
+            4. Pick as `canonical` the clearest, most complete name from that group's own variants. Do not invent a new name.
+            5. Every name below must appear in exactly one group.
+
+            TOPIC NAMES:
+            {numbered}
+            """
+    except Exception as e:
+        raise CustomException(e, sys)
+
+def group_prompt() -> str:
+    try:
+        return """You are an expert technical text organizer for computer science academic notes.
+            You are given a consecutive SECTION of OCR-extracted text blocks from a larger document, in sequential order.
+
+            Your task is to organize and merge these blocks into coherent, topic-based chunks.
+
+            Rules:
+            1. Merge multi-page continuations: If an algorithm, worked example, recurrence derivation, or trace splits across pages, combine it into ONE complete chunk.
+            2. Keep full execution traces intact: Do not split step-by-step array partition trees, sort passes, or recurrence trees into micro-chunks. Keep the entire example whole.
+            3. Content Fidelity: Preserve all original mathematical steps, formulas, and code. Do not summarize or omit steps.
+            4. Categorize correctly: Provide an accurate `parent` and `topic` for each chunk.
+            5. Name topics canonically: This section may begin or end mid-topic, with the rest in an adjacent section you cannot see. Name each topic exactly as the notes name it (e.g. "Merge Sort", not "Merge Sort continued" or "Merge Sort part 2") so a topic split across sections can be reassembled by name. Do not invent a topic for trailing content that clearly belongs to the previous one - use that topic's name.
+            """
+    except Exception as e:
+        raise CustomException(e, sys)

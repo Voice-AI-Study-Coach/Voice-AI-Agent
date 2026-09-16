@@ -93,6 +93,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://voice-ai-agent-ulvh.vercel.app",
+        "https://voice-ai-liart-five.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],

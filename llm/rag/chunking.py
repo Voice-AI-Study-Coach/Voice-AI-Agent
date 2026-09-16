@@ -2,7 +2,7 @@ import os
 import sys
 import re
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from langchain_ollama import ChatOllama
 from langchain_mistralai import ChatMistralAI

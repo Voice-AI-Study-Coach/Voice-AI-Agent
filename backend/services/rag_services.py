@@ -71,8 +71,9 @@ async def run_ingestion(document_id: int) -> None:
         log.info("run_ingestion: document_id=%s chunks persisted", document_id)
 
         # --- 5. mark status GENERATING for frontend streaming -------------
-        set_document_status(document_id=document_id, status="generating", processed=False)
-        log.info("run_ingestion: document_id=%s GENERATING (live topic streaming active)", document_id)
+        # Temporarily skip generating status due to database constraint issue
+        # set_document_status(document_id=document_id, status="generating", processed=False)
+        log.info("run_ingestion: document_id=%s skipping GENERATING status (constraint issue)", document_id)
 
         # --- 6. generate & stream questions topic-by-topic ----------------
         generator = QuestionGenerator(chunks, document_id=document_id)
@@ -125,8 +126,9 @@ async def run_ocr_ingestion(document_id: int) -> None:
         log.info("run_ocr_ingestion: document_id=%s chunks persisted", document_id)
 
         # --- 5. mark status GENERATING for frontend streaming -------------
-        set_document_status(document_id=document_id, status="generating", processed=False)
-        log.info("run_ocr_ingestion: document_id=%s GENERATING (live topic streaming active)", document_id)
+        # Temporarily skip generating status due to database constraint issue
+        # set_document_status(document_id=document_id, status="generating", processed=False)
+        log.info("run_ocr_ingestion: document_id=%s skipping GENERATING status (constraint issue)", document_id)
 
         # --- 6. generate & stream questions topic-by-topic ----------------
         generator = QuestionGenerator(chunks, document_id=document_id)
@@ -178,6 +180,11 @@ def get_document_path(document_id):
 
 def set_document_status(document_id: int, status: str, error: str | None = None, processed: bool = False):
     try:
+        # Skip generating status due to database constraint issue
+        if status == "generating":
+            log.warning("set_document_status: skipping 'generating' status due to database constraint")
+            return
+            
         execute(
             """
             update documents set
